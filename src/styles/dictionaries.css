@@ -1,0 +1,144 @@
+.dict-wrap {
+  display: flex;
+  gap: 20px;
+  padding: 22px 24px 60px;
+  max-width: 1000px;
+}
+.dict-nav {
+  width: 170px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dict-nav button {
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.dict-nav button:hover {
+  background: var(--surface-2);
+}
+.dict-nav button.active {
+  background: var(--ink);
+  color: var(--bg);
+}
+.dict-main {
+  flex: 1;
+  min-width: 0;
+}
+.dict-main h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+}
+.dict-main h2 .cnt {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-faint);
+  margin-left: 8px;
+}
+.dict-main header p {
+  margin: 4px 0 14px;
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}
+.dict-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.dict-tools .text-in {
+  width: 200px;
+}
+.dict-add {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.dict-sort {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.dict-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.dict-table th {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--ink-faint);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.dict-table td {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.dict-table tr:last-child td {
+  border-bottom: none;
+}
+.dict-table .c-num {
+  width: 70px;
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+}
+.dict-table .c-flag {
+  width: 80px;
+}
+.dict-table .c-type {
+  width: 130px;
+}
+.dict-table .c-type select {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.dict-table .c-act {
+  width: 130px;
+  text-align: right;
+  white-space: nowrap;
+}
+.dict-name {
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+  cursor: text;
+  padding: 3px 0;
+  width: 100%;
+}
+.dict-name:hover {
+  color: var(--accent);
+}
+.link-btn.danger {
+  color: var(--status-overdue);
+}
+.link-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

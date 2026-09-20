@@ -1,0 +1,177 @@
+name: Release
+
+# 推一个 vMAJOR.MINOR.PATCH 标签就会构建各平台安装包并发布到 GitHub Releases（附 SHA256SUMS，应用内更新靠它校验）。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      build_date: ${{ steps.version.outputs.build_date }}
+
+    steps:
+      - name: Validate release tag
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" || ! "${version}" =~ ${semver} ]]; then
+            echo "Release tags must use stable vMAJOR.MINOR.PATCH format; received ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+
+          IFS='.' read -r major minor patch <<< "${version}"
+          if (( major > 255 || minor > 255 || patch > 65535 )); then
+            echo "Release tag ${GITHUB_REF_NAME} exceeds Windows MSI version limits." >&2
+            exit 1
+          fi
+
+          echo "value=${version}" >> "${GITHUB_OUTPUT}"
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "${GITHUB_OUTPUT}"
+
+  verify:
+    name: Verify release source
+    needs: metadata
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Linux Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl file libayatana-appindicator3-dev libgtk-3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config wget
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run verify
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  build:
+    name: Build ${{ matrix.label }} installer
+    needs: [metadata, verify]
+    runs-on: ${{ matrix.os }}
+    # Windows 是主力平台，也是唯一支持应用内更新的平台，它失败整个发布就失败；
+    # macOS / Linux 目前没有专门验证过，失败了只是这一份产物缺席，不拦着发布。
+    continue-on-error: ${{ matrix.optional }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows
+            os: windows-latest
+            bundles: msi,nsis
+            optional: false
+          - label: macOS
+            os: macos-latest
+            bundles: dmg
+            optional: true
+          - label: Linux
+            os: ubuntu-24.04
+            bundles: appimage,deb
+            optional: true
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl file libayatana-appindicator3-dev libgtk-3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config wget
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+      - run: pnpm install --frozen-lockfile
+      - name: Build installer
+        shell: bash
+        env:
+          NYAEVENTLIST_VERSION: ${{ needs.metadata.outputs.version }}
+          NYAEVENTLIST_COMMIT: ${{ github.sha }}
+          NYAEVENTLIST_BUILD_DATE: ${{ needs.metadata.outputs.build_date }}
+          NYAEVENTLIST_UPDATE_REPOSITORY: ${{ github.repository }}
+        # 直接调脚本，避开 pnpm 对参数的二次解析；`--` 后面的交给 cargo
+        run: node scripts/tauri-build.mjs --bundles ${{ matrix.bundles }} -- --locked
+      - name: Collect Windows installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          $installers = Get-ChildItem -Path src-tauri/target/release/bundle -Recurse -File |
+            Where-Object { $_.Extension -in ".msi", ".exe" }
+          if (-not $installers) { throw "No Windows installers were produced." }
+          $installers | Copy-Item -Destination release-artifacts
+      - name: Collect macOS and Linux installers
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          find src-tauri/target/release/bundle -type f \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) -exec cp {} release-artifacts/ \;
+          test -n "$(find release-artifacts -maxdepth 1 -type f -print -quit)" || { echo "No installers were produced." >&2; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NyaEventList-${{ matrix.label }}-${{ github.ref_name }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [metadata, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: NyaEventList-*
+          path: downloaded-artifacts
+      - name: Assemble checksums
+        shell: bash
+        run: |
+          mkdir release-files
+          while IFS= read -r -d '' source; do
+            filename="$(basename "${source}")"
+            test ! -e "release-files/${filename}" || { echo "Duplicate release asset: ${filename}" >&2; exit 1; }
+            cp "${source}" "release-files/${filename}"
+          done < <(find downloaded-artifacts -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) -print0)
+          # 应用内更新要靠 Windows 安装包，缺了就不发布，免得发出一个没法更新的版本
+          test -n "$(find release-files -maxdepth 1 -type f \( -name '*-setup.exe' \) -print -quit)" || { echo "The Windows installer is missing; refusing to publish." >&2; exit 1; }
+          (
+            cd release-files
+            sha256sum * > SHA256SUMS
+          )
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: NyaEventList v${{ needs.metadata.outputs.version }}
+          generate_release_notes: true
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
