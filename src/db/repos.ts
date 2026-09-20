@@ -1,4 +1,5 @@
 import { durationHours } from "../lib/time";
+import { createSnapshots } from "./snapshots";
 import type { Db } from "./types";
 import type { EntryInput, EntryPatch, OptionItem, OptionUsage, Requester, RequesterUsage, Task, TaskInput, TaskPatch, TimeEntry } from "./models";
 
@@ -468,7 +469,7 @@ export function createRepos(db: Db) {
     },
   };
 
-  return { options, requesters, tasks, entries, settings };
+  return { options, requesters, tasks, entries, settings, snapshots: createSnapshots(db) };
 }
 
 export type Repos = ReturnType<typeof createRepos>;

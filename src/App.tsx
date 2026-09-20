@@ -3,6 +3,7 @@ import { Activity, useEffect, useRef, useState } from "react";
 import { BoardView } from "./features/board/BoardView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { useEntryCopyShortcut } from "./features/selection/actions";
+import { UndoButtons, useUndoShortcut } from "./features/undo/UndoControls";
 import { StatsView } from "./features/stats/StatsView";
 import { DictionaryView } from "./features/dictionaries/DictionaryView";
 import { CalendarView } from "./features/schedule/CalendarView";
@@ -120,6 +121,7 @@ export default function App() {
   const setScreen = useApp((s) => s.setScreen);
   const updateAvailable = useApp((s) => s.update.status === "available");
   useEntryCopyShortcut();
+  useUndoShortcut();
   useEffect(() => {
     void useApp.getState().init();
     // 界面里很多操作是 void 出去的异步调用，出错时不能悄无声息：统一弹个提示
@@ -160,6 +162,7 @@ export default function App() {
           <div className="topbar-center">
             <strong>{SCREENS.find((s) => s.key === screen)!.title}</strong>
           </div>
+          <UndoButtons />
         </header>
         <main className="screen" data-active="true">
           <Screens screen={screen} />

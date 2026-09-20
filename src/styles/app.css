@@ -192,6 +192,13 @@ textarea {
 .nav-btn:hover {
   background: var(--surface-2);
 }
+.nav-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.nav-btn:disabled:hover {
+  background: var(--surface);
+}
 .range-label {
   font-size: 13px;
   font-weight: 600;

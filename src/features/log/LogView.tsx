@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Task, TimeEntry } from "../../db/models";
+import type { EntryInput, Task, TimeEntry } from "../../db/models";
 import { EntryValidationError } from "../../db/repos";
 import { seedDemo } from "../../db/seedDemo";
 import { durationHours, normDate, normTime } from "../../lib/time";
@@ -316,9 +316,7 @@ export function LogView() {
       return;
     }
     const skipped: string[] = [];
-    let ok = 0;
-    let lastDate: string | null = null;
-    const repos = getRepos();
+    const inputs: EntryInput[] = [];
     for (const [i, p] of parsed.entries()) {
       const t = resolveTask(tasks, p);
       if (!t) {
@@ -336,11 +334,11 @@ export function LogView() {
         skipped.push(`第${i + 1}行结束不晚于开始`);
         continue;
       }
-      await repos.entries.create({ taskId: t.id, date: nd, start: ns, end: ne, workType: p.type || null, content: p.content });
-      lastDate = nd;
-      ok++;
+      inputs.push({ taskId: t.id, date: nd, start: ns, end: ne, workType: p.type || null, content: p.content });
     }
-    await useApp.getState().reloadAll();
+    const ok = inputs.length;
+    const lastDate = inputs.at(-1)?.date;
+    if (ok) await useApp.getState().createEntries(inputs);
     if (ok && lastDate && (lastDate < weekStart || lastDate > weekEnd)) await useApp.getState().setWeek(weekStartFor(lastDate));
     setNotice(skipped.length ? `已粘贴 ${ok} 行；跳过：${skipped.join("；")}` : "");
     toast(`已粘贴 ${ok} 行${skipped.length ? `，跳过 ${skipped.length} 行` : ""}${ok ? "，记得核对日期和时间" : ""}`);
@@ -493,6 +491,7 @@ export function LogView() {
               className="btn-ghost"
               onClick={async () => {
                 await seedDemo(getRepos());
+                useApp.getState().clearHistory();
                 await useApp.getState().reloadAll();
                 toast("已载入示例数据");
               }}

@@ -35,6 +35,9 @@ export function DictionaryView() {
   const [newName, setNewName] = useState("");
   const [error, setError] = useState("");
   const app = useApp.getState();
+  const track = app.track;
+  /** 撤销/重做会在别处改字典，栈一变就重新取一遍 */
+  const historyTick = useApp((s) => s.history);
 
   const def = DICTS.find((d) => d.key === dict)!;
 
@@ -53,7 +56,7 @@ export function DictionaryView() {
   // 数据在每次显示/切换字典时重新取（引用数可能在别的板块里变了），但筛选条件不动
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, historyTick]);
   const switchDict = (key: DictKey) => {
     if (key === dict) return;
     setDict(key);
@@ -87,14 +90,21 @@ export function DictionaryView() {
     const cur = rows.find((r) => r.id === editing.id);
     setEditing(null);
     if (!cur || editing.text.trim() === cur.name) return;
-    await mutate(() => (dict === "requesters" ? getRepos().requesters.rename(editing.id, editing.text) : getRepos().options.rename(editing.id, editing.text)));
+    const { id, text } = editing;
+    await mutate(() => (dict === "requesters" ? track({ requesters: [id] }, () => getRepos().requesters.rename(id, text)) : track({ options: [id] }, () => getRepos().options.rename(id, text))));
   };
 
   const add = async () => {
     const name = newName.trim();
     if (!name) return;
     setNewName("");
-    await mutate(() => (dict === "requesters" ? getRepos().requesters.ensure(name) : getRepos().options.ensure(dict, name)));
+    // 已经有同名项时 ensure 什么都不会新增，不必进撤销栈
+    if (rows.some((r) => r.name === name)) return void (await mutate(() => (dict === "requesters" ? getRepos().requesters.ensure(name) : getRepos().options.ensure(dict, name))));
+    await mutate(() =>
+      dict === "requesters"
+        ? track({}, () => getRepos().requesters.ensure(name), (id) => ({ requesters: [id] }))
+        : track({}, () => getRepos().options.ensure(dict, name), (id) => ({ options: [id] })),
+    );
   };
 
   const unusedCount = rows.filter((r) => r.usage === 0).length;
@@ -168,12 +178,12 @@ export function DictionaryView() {
                 </td>
                 {dict === "status" && (
                   <td className="c-flag">
-                    <input type="checkbox" checked={!!r.isDone} onChange={(e) => void mutate(() => getRepos().options.setDone(r.id, e.target.checked))} />
+                    <input type="checkbox" checked={!!r.isDone} onChange={(e) => void mutate(() => track({ options: [r.id] }, () => getRepos().options.setDone(r.id, e.target.checked)))} />
                   </td>
                 )}
                 {dict === "requesters" && (
                   <td className="c-type">
-                    <select value={r.type ?? ""} onChange={(e) => void mutate(() => getRepos().requesters.setType(r.id, e.target.value || null))}>
+                    <select value={r.type ?? ""} onChange={(e) => void mutate(() => track({ requesters: [r.id] }, () => getRepos().requesters.setType(r.id, e.target.value || null)))}>
                       {!r.type && <option value="">（未设置）</option>}
                       {types.map((t) => (
                         <option key={t} value={t}>
@@ -195,7 +205,7 @@ export function DictionaryView() {
                     className="link-btn danger"
                     disabled={r.usage > 0}
                     title={r.usage > 0 ? "还有记录在引用，不能删" : "删除"}
-                    onClick={() => void mutate(() => (dict === "requesters" ? getRepos().requesters.removeIfUnused(r.id) : getRepos().options.removeIfUnused(r.id)))}
+                    onClick={() => void mutate(() => (dict === "requesters" ? track({ requesters: [r.id] }, () => getRepos().requesters.removeIfUnused(r.id)) : track({ options: [r.id] }, () => getRepos().options.removeIfUnused(r.id))))}
                   >
                     删除
                   </button>

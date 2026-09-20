@@ -3,6 +3,9 @@ import { createRepos, type BulkOptionField, type Repos, type RequesterBulkMode }
 import { openDatabase, isTauri } from "./db/open";
 import type { Db, DbMode } from "./db/types";
 import type { EntryInput, EntryPatch, OptionItem, Requester, Task, TaskInput, TimeEntry } from "./db/models";
+import type { CaptureIds } from "./db/snapshots";
+import { describeStep } from "./features/undo/describe";
+import { UndoHistory, type HistoryInfo } from "./features/undo/history";
 import { checkForApplicationUpdates, describeUpdateError, downloadAndInstallApplicationUpdate, type ApplicationUpdateState } from "./lib/appUpdates";
 import { addDays, fmtDate, weekStartOf } from "./lib/time";
 import type { CopyFormat } from "./features/export/rows";
@@ -35,6 +38,23 @@ export const todayStr = () => fmtDate(new Date());
 export const weekStartFor = (iso: string) => fmtDate(weekStartOf(new Date(`${iso}T00:00:00`)));
 export const weekEndOf = (weekStart: string) => fmtDate(addDays(new Date(`${weekStart}T00:00:00`), 6));
 
+const history = new UndoHistory();
+const NO_HISTORY: HistoryInfo = { undoCount: 0, redoCount: 0, undoLabel: null, redoLabel: null };
+
+/** 会改库的操作（含撤销/重做本身）排队一个接一个做，免得“取改前快照 → 改 → 取改后快照”被别的改动穿插 */
+let queue: Promise<unknown> = Promise.resolve();
+const serial = <T>(fn: () => Promise<T>): Promise<T> => {
+  const run = queue.then(fn);
+  queue = run.catch(() => undefined);
+  return run;
+};
+const mergeIds = (a: CaptureIds, b: CaptureIds): CaptureIds => ({
+  tasks: [...(a.tasks ?? []), ...(b.tasks ?? [])],
+  entries: [...(a.entries ?? []), ...(b.entries ?? [])],
+  options: [...(a.options ?? []), ...(b.options ?? [])],
+  requesters: [...(a.requesters ?? []), ...(b.requesters ?? [])],
+});
+
 interface AppState {
   ready: boolean;
   error: string | null;
@@ -56,6 +76,8 @@ interface AppState {
   /** 应用更新的状态；启动时会静默检查一次，发现新版本设置按钮上会出红点 */
   update: ApplicationUpdateState;
   autoCheckUpdates: boolean;
+  /** 撤销/重做栈的摘要，给顶栏按钮用 */
+  history: HistoryInfo;
   weekStart: string;
   entries: TimeEntry[];
   toastMsg: string;
@@ -97,6 +119,17 @@ interface AppState {
   createEntry(input: EntryInput): Promise<string>;
   updateEntry(id: string, patch: EntryPatch): Promise<void>;
   removeEntry(id: string): Promise<void>;
+  /** 一次建多条（粘贴用），撤销时一起撤 */
+  createEntries(inputs: EntryInput[]): Promise<string[]>;
+  /**
+   * 执行 run，并把它对 ids（以及 created 返回的新建行）造成的变化记进撤销栈。
+   * 字典管理这类直接调 repos 的地方用它包一层。
+   */
+  track<T>(ids: CaptureIds, run: () => Promise<T>, created?: (result: T) => CaptureIds): Promise<T>;
+  undo(): Promise<void>;
+  redo(): Promise<void>;
+  /** 导入/示例数据这种不可撤销的大改动之后调用：旧快照已经对不上了 */
+  clearHistory(): void;
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -115,6 +148,7 @@ export const useApp = create<AppState>((set, get) => ({
   copyHeader: true,
   update: { status: "idle" },
   autoCheckUpdates: true,
+  history: NO_HISTORY,
   selection: EMPTY_SELECTION,
   weekStart: weekStartFor(todayStr()),
   entries: [],
@@ -145,6 +179,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
   /** 导入完成后把流水定位到最近有记录的那一周，而不是停在一片空白的本周。 */
   async goToLatestWeek() {
+    get().clearHistory();
     await get().reloadAll();
     const rows = await database.select<{ d: string | null }>(`SELECT MAX(entry_date) AS d FROM time_entries`);
     const latest = rows[0]?.d;
@@ -240,20 +275,20 @@ export const useApp = create<AppState>((set, get) => ({
     set({ taskForm: null });
   },
   async createTask(input) {
-    const id = await repos.tasks.create(input);
+    const id = await get().track({}, () => repos.tasks.create(input), (made) => ({ tasks: [made] }));
     await Promise.all([get().upsertTasks([id]), get().reloadDicts()]);
     return id;
   },
   async updateTask(id, patch) {
-    await repos.tasks.update(id, patch);
+    await get().track({ tasks: [id] }, () => repos.tasks.update(id, patch));
     await Promise.all([get().upsertTasks([id]), get().reloadDicts(), get().reloadEntries()]);
   },
   async bulkSetOption(ids, field, value) {
-    await repos.tasks.bulkSetOption(ids, field, value);
+    await get().track({ tasks: ids }, () => repos.tasks.bulkSetOption(ids, field, value));
     await Promise.all([get().reloadTasks(), get().reloadDicts()]);
   },
   async bulkRequesters(ids, mode, names) {
-    await repos.tasks.bulkRequesters(ids, mode, names);
+    await get().track({ tasks: ids }, () => repos.tasks.bulkRequesters(ids, mode, names));
     await Promise.all([get().reloadTasks(), get().reloadDicts()]);
   },
   async reloadEntries() {
@@ -272,25 +307,99 @@ export const useApp = create<AppState>((set, get) => ({
     await Promise.all([get().reloadTasks(), get().reloadWorkTypes(), get().reloadDicts(), get().reloadEntries()]);
   },
   async createEntry(input) {
-    const id = await repos.entries.create(input);
+    const id = await get().track({}, () => repos.entries.create(input), (made) => ({ entries: [made] }));
     if (isNewWorkType(get().workTypes, input.workType)) await get().reloadWorkTypes();
     await Promise.all([get().reloadEntries(), get().upsertTasks([input.taskId])]);
     return id;
   },
   async updateEntry(id, patch) {
     const before = get().entries.find((e) => e.id === id)?.taskId;
-    await repos.entries.update(id, patch);
+    await get().track({ entries: [id] }, () => repos.entries.update(id, patch));
     if (isNewWorkType(get().workTypes, patch.workType)) await get().reloadWorkTypes();
     await Promise.all([get().reloadEntries(), get().upsertTasks([before, patch.taskId])]);
   },
   async removeEntries(ids) {
     const taskIds = get().entries.filter((e) => ids.includes(e.id)).map((e) => e.taskId);
-    await repos.entries.removeMany(ids);
+    await get().track({ entries: ids }, () => repos.entries.removeMany(ids));
     await Promise.all([get().reloadEntries(), get().upsertTasks(taskIds)]);
   },
   async removeEntry(id) {
     const before = get().entries.find((e) => e.id === id)?.taskId;
-    await repos.entries.remove(id);
+    await get().track({ entries: [id] }, () => repos.entries.remove(id));
     await Promise.all([get().reloadEntries(), get().upsertTasks([before])]);
   },
+  async createEntries(inputs) {
+    const ids = await get().track(
+      {},
+      async () => {
+        const made: string[] = [];
+        for (const input of inputs) made.push(await repos.entries.create(input));
+        return made;
+      },
+      (made) => ({ entries: made }),
+    );
+    await get().reloadAll();
+    return ids;
+  },
+  track(ids, run, created) {
+    return serial(async () => {
+      const before = await repos.snapshots.capture(ids);
+      const result = await run();
+      const made = created?.(result) ?? {};
+      const after = await repos.snapshots.capture(mergeIds(ids, made));
+      // 新建的行在“改之前”是不存在的：撤销就是把它们删掉
+      before.missingTasks.push(...(made.tasks ?? []));
+      before.missingEntries.push(...(made.entries ?? []));
+      before.missingOptions.push(...(made.options ?? []));
+      before.missingRequesters.push(...(made.requesters ?? []));
+      const step = describeStep(before, after, { taskTitle: (id) => get().tasks.find((t) => t.id === id)?.title });
+      if (step) {
+        history.push({ label: step.label, undoMessage: step.undoMessage, redoMessage: step.redoMessage, before, after });
+        set({ history: history.info() });
+      }
+      return result;
+    });
+  },
+  undo() {
+    return runHistory("undo");
+  },
+  redo() {
+    return runHistory("redo");
+  },
+  clearHistory() {
+    history.clear();
+    set({ history: NO_HISTORY });
+  },
 }));
+
+/** 撤销/重做一步：把库里的行还原成那一步的“改前/改后”，刷新界面，并把结果告诉用户 */
+function runHistory(direction: "undo" | "redo"): Promise<void> {
+  const { toast, reloadAll, setWeek } = useApp.getState();
+  return serial(async () => {
+    const item = direction === "undo" ? history.peekUndo() : history.peekRedo();
+    if (!item) {
+      toast(direction === "undo" ? "没有可以撤销的操作" : "没有可以重做的操作");
+      return;
+    }
+    let conflicts: string[];
+    try {
+      conflicts = await repos.snapshots.apply(direction === "undo" ? item.before : item.after);
+    } catch (e) {
+      toast(`${direction === "undo" ? "撤销" : "重做"}失败：${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    if (direction === "undo") history.commitUndo();
+    else history.commitRedo();
+    useApp.setState({ history: history.info() });
+
+    // 涉及的时间记录不在当前这一周的话，跳过去，让用户看得到变化
+    const { weekStart } = useApp.getState();
+    const dates = [...item.before.entries, ...item.after.entries].map((e) => e.entry_date);
+    const end = weekEndOf(weekStart);
+    if (dates.length && !dates.some((d) => d >= weekStart && d <= end)) await setWeek(weekStartFor(dates[0]));
+    await reloadAll();
+
+    const message = direction === "undo" ? item.undoMessage : item.redoMessage;
+    toast(conflicts.length ? `${message}（有 ${conflicts.length} 处没法还原：${conflicts.join("；")}）` : message);
+  });
+}
