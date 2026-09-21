@@ -14,6 +14,8 @@ const DAY_H = 24 * HOUR_H; // 网格覆盖完整一天 00:00–24:00
 const DEFAULT_SCROLL_HOUR = 7;
 const SNAP = 1 / 12; // 拖动时吸附到 5 分钟
 const DRAG_THRESHOLD = 6; // 鼠标抖动不超过这个像素数就算“点击”，不算拖动
+const MIN_BLOCK_H = 20; // 色块最矮多少像素
+const NARROW_PX = 80; // 块窄于这个宽度就只画长条（样式在 schedule.css 的 @container 里，这里只管悬停卡片的延迟）
 const OPEN_H = 0.75; // 没设结束时间（进行中）的记录，色块画这么高，只是个示意
 const DOWS = ["一", "二", "三", "四", "五", "六", "日"];
 
@@ -24,7 +26,9 @@ type DragMode = "move" | "top" | "bottom";
 
 /** 色块上显示的时间：进行中的只有开始 */
 const timeLabel = (e: TimeEntry) => (e.end ? `${e.start}–${e.end}` : `${e.start} 起`);
-/** 排版和画色块用的结束点；进行中的按示意高度算 */
+/** 排版用的结束点：短记录会被撑到最小高度，分列时按撑高以后的占位算，不然紧挨着的短记录会叠在同一列里 */
+const layoutEnd = (e: TimeEntry) => Math.max(endHours(e), clockToHours(e.start!) + (MIN_BLOCK_H + 3) / HOUR_H);
+/** 画色块用的结束点；进行中的按示意高度算 */
 const endHours = (e: TimeEntry) => (e.end ? clockToHours(e.end) : Math.min(24, clockToHours(e.start!) + OPEN_H));
 
 function showTip(text: string, x: number, y: number) {
@@ -70,7 +74,9 @@ export function CalendarView() {
   };
   const scheduleCard = (id: string, el: HTMLElement) => {
     window.clearTimeout(cardTimer.current);
-    cardTimer.current = window.setTimeout(() => setCard({ id, rect: el.getBoundingClientRect() }), 300); // 稍等一下，鼠标只是路过时别弹
+    const rect = el.getBoundingClientRect();
+    // 稍等一下，鼠标只是路过时别弹；长条上没有文字可看，弹得快一点
+    cardTimer.current = window.setTimeout(() => setCard({ id, rect }), rect.width < NARROW_PX ? 150 : 300);
   };
   // 换视图、换天、数据刷新以后，色块可能已经不是原来那个，卡片和联动高亮也一并收掉
   useEffect(() => {
@@ -203,13 +209,13 @@ export function CalendarView() {
       if (mode === "top") {
         pStart = snap(clamp(origStart + dy / HOUR_H, 0, origEnd - SNAP));
         el.style.top = `${pStart * HOUR_H}px`;
-        el.style.height = `${Math.max(20, (origEnd - pStart) * HOUR_H - 3)}px`;
+        el.style.height = `${Math.max(MIN_BLOCK_H, (origEnd - pStart) * HOUR_H - 3)}px`;
         if (timeEl) timeEl.textContent = `${hoursToClock(pStart)}–${hoursToClock(origEnd)}`;
         showTip(`${hoursToClock(pStart)} · ${(origEnd - pStart).toFixed(2)}h`, ev.clientX, ev.clientY);
       } else if (mode === "bottom") {
         const raw = origEnd + dy / HOUR_H;
         pEnd = snap(clamp(raw, origStart + SNAP, 24));
-        el.style.height = `${Math.max(20, (pEnd - origStart) * HOUR_H - 3)}px`;
+        el.style.height = `${Math.max(MIN_BLOCK_H, (pEnd - origStart) * HOUR_H - 3)}px`;
         if (timeEl) timeEl.textContent = `${hoursToClock(origStart)}–${hoursToClock(pEnd)}`;
         showTip(raw > 24 ? "已到 24:00 · 跨天请拆成两条记录，次日从 00:00 开始" : `${open ? "结束于 " : ""}${hoursToClock(pEnd)} · ${(pEnd - origStart).toFixed(2)}h`, ev.clientX, ev.clientY);
       } else {
@@ -313,7 +319,7 @@ export function CalendarView() {
         </div>
         {days.map((date) => {
           const dayBlocks = byDay.get(date) ?? [];
-          const layout = layoutDay(dayBlocks.map((e) => ({ id: e.id, start: clockToHours(e.start!), end: endHours(e) })));
+          const layout = layoutDay(dayBlocks.map((e) => ({ id: e.id, start: clockToHours(e.start!), end: layoutEnd(e) })));
           return (
             <div
               key={date}
@@ -354,7 +360,7 @@ export function CalendarView() {
                       setLinkedId(null);
                       hideCard();
                     }}
-                    style={{ top: s * HOUR_H, height: Math.max(20, (en - s) * HOUR_H - 3), left: `calc(${slot.col * w}% + 2px)`, width: `calc(${w}% - 4px)` }}
+                    style={{ top: s * HOUR_H, height: Math.max(MIN_BLOCK_H, (en - s) * HOUR_H - 3), left: `calc(${slot.col * w}% + 2px)`, width: `calc(${w}% - 4px)` }}
                     onPointerDown={(e) => {
                       hideCard();
                       if ((e.target as HTMLElement).closest(".cal-block-edit")) return;
@@ -363,6 +369,7 @@ export function CalendarView() {
                     }}
                   >
                     {!open && <div className="cal-block-handle" data-h="top" style={{ top: -4 }} />}
+                    <i className={`cal-block-band ${task?.kind === "routine" ? "kind-routine" : "kind-requirement"}`} />
                     <div className="cal-block-body">
                       <div className="b-title">
                         <span className={`kind-dot ${task?.kind === "routine" ? "kind-routine" : "kind-requirement"}`} />

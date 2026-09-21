@@ -783,3 +783,34 @@
   color: var(--accent);
   font-size: 11px;
 }
+
+/* ---------- 并排太窄的块：只画长条 ---------- */
+.cal-block {
+  container-type: inline-size;
+}
+.cal-block-band {
+  display: none;
+}
+/* 块窄于 80px（周视图里同一时段并排 2 条以上）：文字和 ✎ 都藏起来，只留颜色和一条区分需求/例行的色带；细节靠悬停卡片 */
+@container (max-width: 80px) {
+  .cal-block-body,
+  .cal-block-edit {
+    display: none;
+  }
+  .cal-block-band {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    border-radius: 6px 0 0 6px;
+    pointer-events: none;
+  }
+  .cal-block-band.kind-requirement {
+    background: var(--ink);
+  }
+  .cal-block-band.kind-routine {
+    background: var(--ink-faint);
+  }
+}
