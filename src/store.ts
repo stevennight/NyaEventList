@@ -17,6 +17,9 @@ let database: Db;
 export const getRepos = () => repos;
 export const getDb = () => database;
 
+/** 日程页的两种看法：整周，或者只看某一天（单列铺满，右边列出当天明细） */
+export type ScheduleView = "week" | "day";
+
 export type Screen = "log" | "schedule" | "board" | "stats" | "dictionaries" | "import" | "settings";
 
 /** 时间记录表单：新建（带预填的日期/时间/任务）或编辑当前周里已有的一条 */
@@ -79,6 +82,9 @@ interface AppState {
   /** 撤销/重做栈的摘要，给顶栏按钮用 */
   history: HistoryInfo;
   weekStart: string;
+  /** 日程页当前是看整周还是看某一天；看某一天时看的是 dayDate（总在 weekStart 这一周里） */
+  scheduleView: ScheduleView;
+  dayDate: string;
   entries: TimeEntry[];
   toastMsg: string;
   toastSeq: number;
@@ -116,6 +122,9 @@ interface AppState {
   reloadEntries(): Promise<void>;
   reloadAll(): Promise<void>;
   setWeek(weekStart: string): Promise<void>;
+  setScheduleView(view: ScheduleView): void;
+  /** 切到某一天（跨周会一并换周） */
+  setDay(date: string): Promise<void>;
   createEntry(input: EntryInput): Promise<string>;
   updateEntry(id: string, patch: EntryPatch): Promise<void>;
   removeEntry(id: string): Promise<void>;
@@ -151,6 +160,8 @@ export const useApp = create<AppState>((set, get) => ({
   history: NO_HISTORY,
   selection: EMPTY_SELECTION,
   weekStart: weekStartFor(todayStr()),
+  scheduleView: "week",
+  dayDate: todayStr(),
   entries: [],
   toastMsg: "",
   toastSeq: 0,
@@ -301,7 +312,17 @@ export const useApp = create<AppState>((set, get) => ({
   },
   async setWeek(weekStart) {
     const entries = await repos.entries.listBetween(weekStart, weekEndOf(weekStart));
-    set({ weekStart, entries, selection: EMPTY_SELECTION });
+    // 换周以后“当前这一天”保持是星期几不变（周一看着周一，翻到下周还是周一）
+    const { weekStart: old, dayDate } = get();
+    const idx = Math.min(6, Math.max(0, Math.round((new Date(`${dayDate}T00:00:00`).getTime() - new Date(`${old}T00:00:00`).getTime()) / 86400000)));
+    set({ weekStart, entries, selection: EMPTY_SELECTION, dayDate: fmtDate(addDays(new Date(`${weekStart}T00:00:00`), idx)) });
+  },
+  setScheduleView(scheduleView) {
+    set({ scheduleView, selection: EMPTY_SELECTION });
+  },
+  async setDay(date) {
+    if (weekStartFor(date) !== get().weekStart) await get().setWeek(weekStartFor(date));
+    set({ dayDate: date, selection: EMPTY_SELECTION });
   },
   async reloadAll() {
     await Promise.all([get().reloadTasks(), get().reloadWorkTypes(), get().reloadDicts(), get().reloadEntries()]);
@@ -374,7 +395,7 @@ export const useApp = create<AppState>((set, get) => ({
 
 /** 撤销/重做一步：把库里的行还原成那一步的“改前/改后”，刷新界面，并把结果告诉用户 */
 function runHistory(direction: "undo" | "redo"): Promise<void> {
-  const { toast, reloadAll, setWeek } = useApp.getState();
+  const { toast, reloadAll } = useApp.getState();
   return serial(async () => {
     const item = direction === "undo" ? history.peekUndo() : history.peekRedo();
     if (!item) {
@@ -393,10 +414,11 @@ function runHistory(direction: "undo" | "redo"): Promise<void> {
     useApp.setState({ history: history.info() });
 
     // 涉及的时间记录不在当前这一周的话，跳过去，让用户看得到变化
-    const { weekStart } = useApp.getState();
+    const { weekStart, scheduleView, dayDate, screen } = useApp.getState();
     const dates = [...item.before.entries, ...item.after.entries].map((e) => e.entry_date);
     const end = weekEndOf(weekStart);
-    if (dates.length && !dates.some((d) => d >= weekStart && d <= end)) await setWeek(weekStartFor(dates[0]));
+    const seeingOneDay = screen === "schedule" && scheduleView === "day";
+    if (dates.length && !dates.some((d) => (seeingOneDay ? d === dayDate : d >= weekStart && d <= end))) await useApp.getState().setDay(dates[0]);
     await reloadAll();
 
     const message = direction === "undo" ? item.undoMessage : item.redoMessage;

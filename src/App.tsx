@@ -15,29 +15,41 @@ import { TaskFormModal } from "./features/tasks/TaskFormModal";
 import { addDays, fmtDate, parseISODate } from "./lib/time";
 import { todayStr, useApp, weekEndOf, weekStartFor, type Screen } from "./store";
 
-function WeekBar() {
-  const weekStart = useApp((s) => s.weekStart);
-  const setWeek = useApp((s) => s.setWeek);
+const DOW_NAMES = ["一", "二", "三", "四", "五", "六", "日"];
+
+/** 流水页和日程页顶栏左边的时间导航。日程页多一个“周 / 日”切换，选“日”时按天前后翻。 */
+function WeekBar({ withViews }: { withViews: boolean }) {
+  const { weekStart, view, dayDate } = useApp(useShallow((s) => ({ weekStart: s.weekStart, view: s.scheduleView, dayDate: s.dayDate })));
+  const { setWeek, setDay, setScheduleView } = useApp.getState();
+  const day = withViews && view === "day";
   const end = weekEndOf(weekStart);
   const fmt = (iso: string) => {
     const d = parseISODate(iso);
     return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
   };
-  const shift = (n: number) => void setWeek(fmtDate(addDays(parseISODate(weekStart), n * 7)));
+  const shift = (n: number) => (day ? void setDay(fmtDate(addDays(parseISODate(dayDate), n))) : void setWeek(fmtDate(addDays(parseISODate(weekStart), n * 7))));
+  const unit = day ? "天" : "周";
   return (
     <div className="topbar-left">
-      <button type="button" className="nav-btn" onClick={() => shift(-1)} aria-label="上一周">
+      <button type="button" className="nav-btn" onClick={() => shift(-1)} aria-label={`上一${unit}`}>
         ‹
       </button>
-      <div className="range-label">
-        {fmt(weekStart)} – {fmt(end)}
-      </div>
-      <button type="button" className="nav-btn" onClick={() => shift(1)} aria-label="下一周">
+      <div className="range-label">{day ? `${fmt(dayDate)} 周${DOW_NAMES[(parseISODate(dayDate).getDay() + 6) % 7]}` : `${fmt(weekStart)} – ${fmt(end)}`}</div>
+      <button type="button" className="nav-btn" onClick={() => shift(1)} aria-label={`下一${unit}`}>
         ›
       </button>
-      <button type="button" className="today-btn" onClick={() => void setWeek(weekStartFor(todayStr()))}>
-        本周
+      <button type="button" className="today-btn" onClick={() => (day ? void setDay(todayStr()) : void setWeek(weekStartFor(todayStr())))}>
+        {day ? "今天" : "本周"}
       </button>
+      {withViews && (
+        <div className="view-switch" role="group" aria-label="日程视图">
+          {(["week", "day"] as const).map((v) => (
+            <button key={v} type="button" className={view === v ? "active" : ""} aria-pressed={view === v} title={v === "week" ? "看整周" : "只看一天：单列铺满，右边列出当天全部记录"} onClick={() => setScheduleView(v)}>
+              {v === "week" ? "周" : "日"}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -158,7 +170,7 @@ export default function App() {
       </nav>
       <div className="shell">
         <header className="topbar">
-          {(screen === "log" || screen === "schedule") && <WeekBar />}
+          {(screen === "log" || screen === "schedule") && <WeekBar withViews={screen === "schedule"} />}
           <div className="topbar-center">
             <strong>{SCREENS.find((s) => s.key === screen)!.title}</strong>
           </div>

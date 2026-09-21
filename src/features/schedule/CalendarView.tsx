@@ -1,10 +1,12 @@
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { TimeEntry } from "../../db/models";
 import { addDays, clockToHours, fmtDate, hoursToClock, parseISODate } from "../../lib/time";
 import { todayStr, useApp } from "../../store";
 import { clickSelect, EMPTY_SELECTION, marqueeSelect, rectFromPoints, rectsIntersect, selectAll } from "../selection/selection";
 import { SelectionBar } from "../selection/SelectionBar";
+import { DayList } from "./DayList";
+import { EntryHoverCard } from "./EntryHoverCard";
 import { layoutDay } from "./layout";
 
 const HOUR_H = 52; // 每小时的像素高度
@@ -40,22 +42,52 @@ function showTip(text: string, x: number, y: number) {
 const hideTip = () => document.getElementById("drag-tip")?.remove();
 
 export function CalendarView() {
-  const { entries, tasks, weekStart, selection } = useApp(useShallow((s) => ({ entries: s.entries, tasks: s.tasks, weekStart: s.weekStart, selection: s.selection })));
+  const { entries, tasks, weekStart, selection, view, dayDate } = useApp(useShallow((s) => ({ entries: s.entries, tasks: s.tasks, weekStart: s.weekStart, selection: s.selection, view: s.scheduleView, dayDate: s.dayDate })));
   const canvasRef = useRef<HTMLDivElement>(null);
   const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
-  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => fmtDate(addDays(parseISODate(weekStart), i))), [weekStart]);
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => fmtDate(addDays(parseISODate(weekStart), i))), [weekStart]);
+  const dayMode = view === "day";
+  const days = dayMode ? [dayDate] : weekDays;
   const today = todayStr();
 
   const scrolled = useRef(false);
   useEffect(() => {
     if (scrolled.current) return; // 板块被隐藏再显示时别把滚动位置又拉回 07:00
-    const el = canvasRef.current?.parentElement;
+    const el = canvasRef.current?.closest<HTMLElement>(".canvas");
     if (el) el.scrollTop = DEFAULT_SCROLL_HOUR * HOUR_H;
     scrolled.current = true;
   }, []);
 
   const openEdit = (id: string) => useApp.getState().openEntryForm({ mode: "edit", id });
-  const order = useMemo(() => entries.map((e) => e.id), [entries]);
+
+  /* ---------- 悬停详情卡片 / 日视图列表联动 ---------- */
+  const [card, setCard] = useState<{ id: string; rect: DOMRect } | null>(null);
+  const [linkedId, setLinkedId] = useState<string | null>(null); // 日视图里列表和色块互相高亮
+  const cardTimer = useRef(0);
+  const hideCard = () => {
+    window.clearTimeout(cardTimer.current);
+    setCard(null);
+  };
+  const scheduleCard = (id: string, el: HTMLElement) => {
+    window.clearTimeout(cardTimer.current);
+    cardTimer.current = window.setTimeout(() => setCard({ id, rect: el.getBoundingClientRect() }), 300); // 稍等一下，鼠标只是路过时别弹
+  };
+  // 换视图、换天、数据刷新以后，色块可能已经不是原来那个，卡片和联动高亮也一并收掉
+  useEffect(() => {
+    hideCard();
+    setLinkedId(null);
+  }, [dayMode, dayDate, weekStart, entries]);
+  useEffect(() => {
+    const scroller = canvasRef.current?.closest<HTMLElement>(".canvas");
+    scroller?.addEventListener("scroll", hideCard, { passive: true });
+    return () => {
+      scroller?.removeEventListener("scroll", hideCard);
+      window.clearTimeout(cardTimer.current);
+    };
+  }, []);
+  /** 当前看得到的记录（日视图只有这一天）——选区的顺序、Ctrl+A 都以它为准 */
+  const visible = useMemo(() => (dayMode ? entries.filter((e) => e.date === dayDate) : entries), [entries, dayMode, dayDate]);
+  const order = useMemo(() => visible.map((e) => e.id), [visible]);
   const chosen = useMemo(() => new Set(selection.ids), [selection.ids]);
   /** 键盘（Ctrl+C、Ctrl+A、Esc）要有个能接住焦点的地方 */
   const focusCanvas = () => canvasRef.current?.focus({ preventScroll: true });
@@ -72,7 +104,7 @@ export function CalendarView() {
   /** 在空白处拖出一个矩形框，碰到的色块都选中；按住 Ctrl 或 Shift 拖，叠加在原来的选区上。拖到边缘会自动滚动。 */
   const startMarquee = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || e.target !== e.currentTarget) return;
-    const scroller = canvasRef.current?.parentElement;
+    const scroller = canvasRef.current?.closest<HTMLElement>(".canvas");
     if (!scroller) return;
     e.preventDefault();
     focusCanvas();
@@ -240,24 +272,38 @@ export function CalendarView() {
     }
   };
 
+  const dayEntries = useMemo(() => visible, [visible]);
   const byDay = useMemo(() => {
     const m = new Map<string, TimeEntry[]>();
     for (const e of entries) if (e.start) (m.get(e.date) ?? m.set(e.date, []).get(e.date)!).push(e);
     return m;
   }, [entries]);
 
-  return (
-    <div className="cal-wrap" ref={canvasRef} tabIndex={-1} onKeyDown={onKeyDown}>
-      <div className="cal-header">
+  const gridCols = { gridTemplateColumns: `56px repeat(${days.length}, 1fr)` };
+  /** 日视图里点列表一项：选中它，并把对应的色块滚到看得见的地方 */
+  const pickFromList = (id: string, mods: { shift: boolean; ctrl: boolean }) => {
+    clickBlock(id, mods);
+    canvasRef.current?.querySelector<HTMLElement>(`.cal-block[data-id="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+  const cardEntry = card ? entries.find((e) => e.id === card.id) : undefined;
+
+  const calendar = (
+    <div className={`cal-wrap${dayMode ? " day-mode" : ""}`} ref={canvasRef} tabIndex={-1} onKeyDown={onKeyDown}>
+      <div className="cal-header" style={gridCols}>
         <div />
-        {days.map((d, i) => (
-          <div key={d} className={`day-head${d === today ? " is-today" : ""}`}>
-            <div className="dow">周{DOWS[i]}</div>
+        {days.map((d) => (
+          <div
+            key={d}
+            className={`day-head${d === today ? " is-today" : ""}${dayMode ? "" : " clickable"}`}
+            title={dayMode ? undefined : "点一下，只看这一天"}
+            onClick={dayMode ? undefined : () => void useApp.getState().setDay(d).then(() => useApp.getState().setScheduleView("day"))}
+          >
+            <div className="dow">周{DOWS[(parseISODate(d).getDay() + 6) % 7]}</div>
             <div className="dnum tnum">{Number(d.slice(8))}</div>
           </div>
         ))}
       </div>
-      <div className="cal-grid">
+      <div className="cal-grid" style={gridCols}>
         <div className="hour-col">
           {Array.from({ length: 24 }, (_, h) => (
             <div key={h} className="hour-cell">
@@ -266,8 +312,8 @@ export function CalendarView() {
           ))}
         </div>
         {days.map((date) => {
-          const dayEntries = byDay.get(date) ?? [];
-          const layout = layoutDay(dayEntries.map((e) => ({ id: e.id, start: clockToHours(e.start!), end: endHours(e) })));
+          const dayBlocks = byDay.get(date) ?? [];
+          const layout = layoutDay(dayBlocks.map((e) => ({ id: e.id, start: clockToHours(e.start!), end: endHours(e) })));
           return (
             <div
               key={date}
@@ -287,7 +333,7 @@ export function CalendarView() {
                 useApp.getState().openEntryForm({ mode: "create", defaults: { date, start: hoursToClock(start), end: hoursToClock(Math.min(24, start + 1)) } });
               }}
             >
-              {dayEntries.map((entry) => {
+              {dayBlocks.map((entry) => {
                 const task = taskById.get(entry.taskId);
                 const s = clockToHours(entry.start!);
                 const en = endHours(entry);
@@ -298,11 +344,19 @@ export function CalendarView() {
                   <div
                     key={entry.id}
                     data-id={entry.id}
-                    className={`cal-block${task?.statusDone ? " done" : ""}${open ? " open" : ""}${chosen.has(entry.id) ? " selected" : ""}`}
+                    className={`cal-block${task?.statusDone ? " done" : ""}${open ? " open" : ""}${chosen.has(entry.id) ? " selected" : ""}${linkedId === entry.id ? " linked" : ""}`}
                     onDoubleClick={() => openEdit(entry.id)}
+                    onPointerEnter={(e) => {
+                      setLinkedId(entry.id);
+                      if (e.pointerType === "mouse" && !e.buttons) scheduleCard(entry.id, e.currentTarget);
+                    }}
+                    onPointerLeave={() => {
+                      setLinkedId(null);
+                      hideCard();
+                    }}
                     style={{ top: s * HOUR_H, height: Math.max(20, (en - s) * HOUR_H - 3), left: `calc(${slot.col * w}% + 2px)`, width: `calc(${w}% - 4px)` }}
-                    title={`${entry.taskTitle}\n${timeLabel(entry)}${entry.workType ? " · " + entry.workType : ""}${entry.content ? "\n" + entry.content : ""}\n${open ? "还没设结束时间（进行中），色块高度只是示意；把下边缘往下拖就是设定结束时间" : "拖中间挪动、拖边缘改时长"}；单击选中（Ctrl/Shift 叠加），双击或点 ✎ 编辑`}
                     onPointerDown={(e) => {
+                      hideCard();
                       if ((e.target as HTMLElement).closest(".cal-block-edit")) return;
                       const handle = (e.target as HTMLElement).closest<HTMLElement>(".cal-block-handle");
                       startPointer(e, entry, handle ? (handle.dataset.h as DragMode) : "move");
@@ -331,6 +385,15 @@ export function CalendarView() {
         })}
       </div>
       <SelectionBar />
+      {card && cardEntry && <EntryHoverCard entry={cardEntry} task={taskById.get(cardEntry.taskId)} rect={card.rect} />}
+    </div>
+  );
+
+  // 周/日两种看法用同一棵树，切换时日历本身不重新挂载
+  return (
+    <div className={dayMode ? "cal-day-layout" : undefined}>
+      {calendar}
+      {dayMode && <DayList date={dayDate} entries={dayEntries} taskById={taskById} chosen={chosen} hoverId={linkedId} onHover={setLinkedId} onPick={pickFromList} onEdit={openEdit} />}
     </div>
   );
 }
