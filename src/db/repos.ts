@@ -41,8 +41,8 @@ const chunk = <T>(list: T[], size = 800): T[][] => {
 const marks = (list: unknown[]) => list.map(() => "?").join(",");
 
 /** 结束必须晚于开始；一条记录不跨越午夜（跨天请拆成两条，见设计文档 5.6）。 */
-export function assertValidRange(start: string, end: string): void {
-  if (durationHours(start, end) <= 0) {
+export function assertValidRange(start: string, end: string | null | undefined): void {
+  if (end && durationHours(start, end) <= 0) {
     throw new EntryValidationError("结束时间要晚于开始时间；跨天的工作请拆成两条记录（今天到 24:00，次日从 00:00 开始）。");
   }
 }
@@ -407,13 +407,14 @@ export function createRepos(db: Db) {
       return rows[0] ? mapEntry(rows[0]) : null;
     },
     async create(input: EntryInput): Promise<string> {
-      assertValidRange(input.start, input.end);
+      const end = input.end || null;
+      assertValidRange(input.start, end);
       const id = uid();
       const ts = nowIso();
       await db.execute(
         `INSERT INTO time_entries (id, task_id, entry_date, start_time, end_time, duration_hours, is_time_based, work_type_option_id, content, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-        [id, input.taskId, input.date, input.start, input.end, durationHours(input.start, input.end), await options.ensureOrNull("work_type", input.workType), input.content ?? "", ts, ts],
+        [id, input.taskId, input.date, input.start, end, end ? durationHours(input.start, end) : 0, await options.ensureOrNull("work_type", input.workType), input.content ?? "", ts, ts],
       );
       return id;
     },
@@ -421,8 +422,8 @@ export function createRepos(db: Db) {
       const cur = await entries.get(id);
       if (!cur) throw new Error("时间记录不存在");
       const start = patch.start ?? cur.start;
-      const end = patch.end ?? cur.end;
-      if (!start || !end) throw new Error("这条记录没有起止时间");
+      const end = patch.end === undefined ? cur.end : patch.end || null;
+      if (!start) throw new Error("这条记录没有开始时间");
       assertValidRange(start, end);
       await db.execute(
         `UPDATE time_entries SET task_id = ?, entry_date = ?, start_time = ?, end_time = ?, duration_hours = ?,
@@ -432,7 +433,7 @@ export function createRepos(db: Db) {
           patch.date ?? cur.date,
           start,
           end,
-          durationHours(start, end),
+          end ? durationHours(start, end) : 0,
           patch.workType !== undefined ? await options.ensureOrNull("work_type", patch.workType) : await options.ensureOrNull("work_type", cur.workType),
           patch.content ?? cur.content,
           nowIso(),

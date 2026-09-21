@@ -36,14 +36,14 @@ export function EntryFormModal() {
     const ne = normTime(end);
     if (!taskId) return setError("先选一个任务");
     if (!nd) return setError("日期没填完整，或者这一天不存在");
-    if (!ns || !ne) return setError("开始/结束时间没填完整");
+    if (!ns) return setError("开始时间没填完整");
     setSaving(true);
     try {
       const app = useApp.getState();
-      if (form.mode === "create") await app.createEntry({ taskId, date: nd, start: ns, end: ne, workType: workType || null, content });
-      else await app.updateEntry(form.id, { taskId, date: nd, start: ns, end: ne, workType: workType || null, content });
+      if (form.mode === "create") await app.createEntry({ taskId, date: nd, start: ns, end: ne ?? null, workType: workType || null, content });
+      else await app.updateEntry(form.id, { taskId, date: nd, start: ns, end: ne ?? null, workType: workType || null, content });
       if (nd < weekStart || nd > weekEndOf(weekStart)) await app.setWeek(weekStartFor(nd));
-      app.toast(form.mode === "create" ? "已新建时间记录" : "已保存时间记录");
+      app.toast(`${form.mode === "create" ? "已新建时间记录" : "已保存时间记录"}${ne ? "" : "（结束时间留空，记为进行中）"}`);
       closeEntryForm();
     } catch (e) {
       setError(e instanceof EntryValidationError ? CROSS_DAY_MSG : e instanceof Error ? e.message : String(e));
@@ -65,11 +65,19 @@ export function EntryFormModal() {
       现在
     </button>
   );
+  const clearAndNowBtn = (set: (v: string) => void) => (
+    <>
+      {nowBtn(set)}
+      <button type="button" className="btn-now" title="清空结束时间，这条记录记为进行中" onClick={() => set("")}>
+        清空
+      </button>
+    </>
+  );
   const focusField = (label: string) => document.querySelector<HTMLInputElement>(`.modal [aria-label="${label}"] input`)?.focus();
   const timeField = (label: string, value: string, set: (v: string) => void, next?: string) => (
     <div className="field">
-      <label>{label}</label>
-      <SegmentedField kind="time" value={value} onChange={set} picker allow24={label === "结束"} ariaLabel={label} extra={nowBtn(set)} onComplete={next ? () => focusField(next) : undefined} />
+      <label>{label === "结束" ? "结束（可留空 = 进行中）" : label}</label>
+      <SegmentedField kind="time" value={value} onChange={set} picker allow24={label === "结束"} ariaLabel={label} extra={label === "结束" ? clearAndNowBtn(set) : nowBtn(set)} onComplete={next ? () => focusField(next) : undefined} />
     </div>
   );
 

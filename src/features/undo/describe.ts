@@ -89,7 +89,7 @@ export function collectChanges(before: Snapshot, after: Snapshot, ctx: DescribeC
   const bEntry = new Map(before.entries.map((e) => [e.id, e]));
   const aEntry = new Map(after.entries.map((e) => [e.id, e]));
   const title = (taskId: string) => ctx.taskTitle(taskId) ?? aTask.get(taskId)?.row.title ?? bTask.get(taskId)?.row.title ?? "（未知任务）";
-  const when = (e: { entry_date: string; start_time: string | null; end_time: string | null }) => `${e.entry_date} ${e.start_time ?? ""}–${e.end_time ?? ""}`;
+  const when = (e: { entry_date: string; start_time: string | null; end_time: string | null }) => `${e.entry_date} ${e.start_time ?? ""}–${e.end_time ?? "进行中"}`;
   for (const id of new Set([...bEntry.keys(), ...aEntry.keys()])) {
     const b = bEntry.get(id);
     const a = aEntry.get(id);
@@ -101,7 +101,7 @@ export function collectChanges(before: Snapshot, after: Snapshot, ctx: DescribeC
       add("任务", title(b.task_id), title(a.task_id));
       add("日期", b.entry_date, a.entry_date);
       add("开始", b.start_time, a.start_time);
-      add("结束", b.end_time, a.end_time);
+      add("结束", b.end_time ?? "进行中", a.end_time ?? "进行中");
       add("工作内容划分", opName(b.work_type_option_id), opName(a.work_type_option_id));
       add("内容", b.content, a.content);
       if (fields.length) changes.push({ kind: "时间记录", op: "修改", name: `「${clip(title(a.task_id))}」${when(a)}`, fields });

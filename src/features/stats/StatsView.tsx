@@ -156,7 +156,10 @@ export function StatsView() {
         <div className="imp-card">
           <div className="n tnum">{stats.entryCount}</div>
           <div className="k">时间记录</div>
-          <div className="s">涉及 {stats.taskCount} 个任务</div>
+          <div className="s">
+            涉及 {stats.taskCount} 个任务
+            {stats.openCount > 0 && ` · ${stats.openCount} 条进行中未计工时`}
+          </div>
         </div>
         <div className="imp-card">
           <div className="n tnum">{stats.activeDays}</div>

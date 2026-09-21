@@ -147,7 +147,11 @@ export function LogView() {
     } else if (field === "start" || field === "end") {
       if (raw.trim() === "") {
         if (row === DRAFT) await setField(row, field, "");
-        else fail(row, field, "时间没填完整");
+        else if (field === "end") {
+          if (fieldValue(row, "end")) {
+            if (await setField(row, "end", "")) toast("结束时间已清空，这条记录记为进行中");
+          }
+        } else fail(row, field, "时间没填完整");
         return;
       }
       const nt = normTime(raw);
@@ -181,15 +185,14 @@ export function LogView() {
     const ns = normTime(d.start);
     const ne = normTime(d.end);
     if (!ns) return failDraft("start", "开始时间没填完整；Ctrl+; 填现在。");
-    if (!ne) return failDraft("end", "结束时间没填完整；Ctrl+; 直接填现在。");
     try {
-      await useApp.getState().createEntry({ taskId: d.taskId, date: nd, start: ns, end: ne, workType: d.type || null, content: d.content });
+      await useApp.getState().createEntry({ taskId: d.taskId, date: nd, start: ns, end: ne ?? null, workType: d.type || null, content: d.content });
     } catch (e) {
       return failDraft("end", errText(e));
     }
     if (nd < weekStart || nd > weekEnd) await useApp.getState().setWeek(weekStartFor(nd));
-    resetDraft({ taskId: "", type: d.type, content: "", date: nd, start: ne === "24:00" ? "" : ne, end: "" });
-    toast(`已记录 ${ns}–${ne}`);
+    resetDraft({ taskId: "", type: d.type, content: "", date: nd, start: !ne || ne === "24:00" ? "" : ne, end: "" });
+    toast(ne ? `已记录 ${ns}–${ne}` : `已记录 ${ns} 起，结束时间留空，记为进行中（之后在结束格补上）`);
     requestAnimationFrame(() => focusCell(DRAFT, "task"));
   };
 
@@ -326,15 +329,15 @@ export function LogView() {
       const nd = normDate(p.date, yearOf(weekStart));
       const ns = normTime(p.start);
       const ne = normTime(p.end);
-      if (!nd || !ns || !ne) {
+      if (!nd || !ns || (p.end.trim() && !ne)) {
         skipped.push(`第${i + 1}行日期/时间缺失或格式不对`);
         continue;
       }
-      if (durationHours(ns, ne) <= 0) {
+      if (ne && durationHours(ns, ne) <= 0) {
         skipped.push(`第${i + 1}行结束不晚于开始`);
         continue;
       }
-      inputs.push({ taskId: t.id, date: nd, start: ns, end: ne, workType: p.type || null, content: p.content });
+      inputs.push({ taskId: t.id, date: nd, start: ns, end: ne ?? null, workType: p.type || null, content: p.content });
     }
     const ok = inputs.length;
     const lastDate = inputs.at(-1)?.date;
@@ -406,7 +409,7 @@ export function LogView() {
       />
     );
     return (
-      <tr key={row} data-row={row} className={`log-row${isDraft ? " log-draft" : ""}${e && chosen.has(e.id) ? " selected" : ""}`}>
+      <tr key={row} data-row={row} className={`log-row${isDraft ? " log-draft" : ""}${e && !e.end ? " log-open" : ""}${e && chosen.has(e.id) ? " selected" : ""}`}>
         <td className="c-num" tabIndex={0} title={isDraft ? undefined : "点击选中；Ctrl / Shift 叠加，上下拖动选多行，Ctrl+C 复制"} onMouseDown={e ? (ev) => onNumMouseDown(ev, e.id) : undefined}>
           {label}
         </td>
@@ -454,7 +457,7 @@ export function LogView() {
         <td className={`c-time ${cellClass(row, "end") ?? ""}`} data-field="end">
           {seg("end")}
         </td>
-        <td className="c-dur tnum">{dur > 0 ? `${dur.toFixed(2)}h` : ""}</td>
+        <td className="c-dur tnum">{e && !e.end ? <span className="open-tag" title="还没设结束时间，用时先不计；在“结束”格补上就行">进行中</span> : dur > 0 ? `${dur.toFixed(2)}h` : ""}</td>
         <td className="c-del">
           {e && (
             <button
@@ -480,7 +483,7 @@ export function LogView() {
     <div className="log-wrap" ref={rootRef} onKeyDown={onKeyDown} onPaste={(e) => void onPaste(e)}>
       <div className="log-hint">
         <kbd>Tab</kbd> 换格 · 日期/时间直接敲数字，敲满自动跳下一段/下一格 · <kbd>Ctrl</kbd>+<kbd>;</kbd> 填今天/现在（按当前格的类型） · <kbd>Ctrl</kbd>+<kbd>D</kbd> 复制上一行同一格 · <kbd>Ctrl</kbd>+<kbd>Enter</kbd>{" "}
-        保存并新开一行 · 点行号选中（<kbd>Ctrl</kbd> 加选、<kbd>Shift</kbd> 选区间、上下拖动框选、<kbd>Shift</kbd>+<kbd>↑↓</kbd> 扩选），<kbd>Ctrl</kbd>+<kbd>C</kbd> 复制，Excel 明细行也能直接粘进来
+        保存并新开一行 · 点行号选中（<kbd>Ctrl</kbd> 加选、<kbd>Shift</kbd> 选区间、上下拖动框选、<kbd>Shift</kbd>+<kbd>↑↓</kbd> 扩选），<kbd>Ctrl</kbd>+<kbd>C</kbd> 复制，Excel 明细行也能直接粘进来 · 结束时间可以先空着，记为“进行中”，之后补上
       </div>
       {tasks.length === 0 && (
         <div className="empty-note">

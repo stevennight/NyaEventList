@@ -10,6 +10,8 @@ export interface Bucket {
 export interface Stats {
   totalHours: number;
   entryCount: number;
+  /** 其中还没设结束时间（进行中）的记录数：没有用时，不计入工时和各项分布 */
+  openCount: number;
   taskCount: number;
   /** 有记录的天数 */
   activeDays: number;
@@ -49,9 +51,14 @@ export function summarize(entries: TimeEntry[], tasks: Task[], requesterTypes: R
   const perDay = new Map<string, number>();
   const taskIds = new Set<string>();
   let total = 0;
+  let openCount = 0;
 
   for (const e of entries) {
     if (e.date < from || e.date > to) continue;
+    if (!e.end) {
+      openCount++;
+      continue;
+    }
     const h = e.durationHours;
     const t = taskById.get(e.taskId);
     total += h;
@@ -83,6 +90,7 @@ export function summarize(entries: TimeEntry[], tasks: Task[], requesterTypes: R
   return {
     totalHours: round2(total),
     entryCount: entries.filter((e) => e.date >= from && e.date <= to).length,
+    openCount,
     taskCount: taskIds.size,
     activeDays,
     avgHoursPerActiveDay: activeDays ? round2(total / activeDays) : 0,

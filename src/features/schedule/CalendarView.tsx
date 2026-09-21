@@ -12,12 +12,18 @@ const DAY_H = 24 * HOUR_H; // 网格覆盖完整一天 00:00–24:00
 const DEFAULT_SCROLL_HOUR = 7;
 const SNAP = 1 / 12; // 拖动时吸附到 5 分钟
 const DRAG_THRESHOLD = 6; // 鼠标抖动不超过这个像素数就算“点击”，不算拖动
+const OPEN_H = 0.75; // 没设结束时间（进行中）的记录，色块画这么高，只是个示意
 const DOWS = ["一", "二", "三", "四", "五", "六", "日"];
 
 const snap = (h: number) => Math.round(h / SNAP) * SNAP;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 type DragMode = "move" | "top" | "bottom";
+
+/** 色块上显示的时间：进行中的只有开始 */
+const timeLabel = (e: TimeEntry) => (e.end ? `${e.start}–${e.end}` : `${e.start} 起`);
+/** 排版和画色块用的结束点；进行中的按示意高度算 */
+const endHours = (e: TimeEntry) => (e.end ? clockToHours(e.end) : Math.min(24, clockToHours(e.start!) + OPEN_H));
 
 function showTip(text: string, x: number, y: number) {
   let el = document.getElementById("drag-tip");
@@ -135,11 +141,12 @@ export function CalendarView() {
 
   /* ---------- 色块：拖中间挪动、拖上下边缘改时长、不动就是点击编辑 ---------- */
   const startPointer = (e: React.PointerEvent<HTMLDivElement>, entry: TimeEntry, mode: DragMode) => {
-    if (e.button !== 0 || !entry.start || !entry.end) return;
+    if (e.button !== 0 || !entry.start) return;
     e.preventDefault();
     const el = e.currentTarget;
+    const open = !entry.end;
     const origStart = clockToHours(entry.start);
-    const origEnd = clockToHours(entry.end);
+    const origEnd = endHours(entry); // 进行中的按示意高度算：拖下沿就是给它定结束时间
     const dur = origEnd - origStart;
     const [x0, y0] = [e.clientX, e.clientY];
     const mods = { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey };
@@ -148,7 +155,7 @@ export function CalendarView() {
     let pStart = origStart;
     let pEnd = origEnd;
     let pDate = entry.date;
-    const timeEl = el.querySelector<HTMLElement>(".b-time");
+    const timeEl = el.querySelector<HTMLElement>(".b-range");
 
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - x0;
@@ -172,7 +179,7 @@ export function CalendarView() {
         pEnd = snap(clamp(raw, origStart + SNAP, 24));
         el.style.height = `${Math.max(20, (pEnd - origStart) * HOUR_H - 3)}px`;
         if (timeEl) timeEl.textContent = `${hoursToClock(origStart)}–${hoursToClock(pEnd)}`;
-        showTip(raw > 24 ? "已到 24:00 · 跨天请拆成两条记录，次日从 00:00 开始" : `${hoursToClock(pEnd)} · ${(pEnd - origStart).toFixed(2)}h`, ev.clientX, ev.clientY);
+        showTip(raw > 24 ? "已到 24:00 · 跨天请拆成两条记录，次日从 00:00 开始" : `${open ? "结束于 " : ""}${hoursToClock(pEnd)} · ${(pEnd - origStart).toFixed(2)}h`, ev.clientX, ev.clientY);
       } else {
         el.style.transform = `translate(${dx}px, ${dy}px)`;
         const col = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>(".day-col");
@@ -194,14 +201,15 @@ export function CalendarView() {
         if (mode === "move") clickBlock(entry.id, mods);
         return;
       }
-      const patch = mode === "top" ? { start: hoursToClock(pStart) } : mode === "bottom" ? { end: hoursToClock(pEnd) } : { start: hoursToClock(pStart), end: hoursToClock(pEnd), date: pDate };
+      // 进行中的记录挪动时只改开始和日期，结束时间仍然留空
+      const patch = mode === "top" ? { start: hoursToClock(pStart) } : mode === "bottom" ? { end: hoursToClock(pEnd) } : open ? { start: hoursToClock(pStart), date: pDate } : { start: hoursToClock(pStart), end: hoursToClock(pEnd), date: pDate };
       try {
         await useApp.getState().updateEntry(entry.id, patch);
-        useApp.getState().toast(`已更新时间记录 · ${pDate.slice(5)} ${hoursToClock(pStart)}–${hoursToClock(pEnd)}`);
+        useApp.getState().toast(open && mode === "move" ? `已更新时间记录 · ${pDate.slice(5)} ${hoursToClock(pStart)} 起（进行中）` : `已更新时间记录 · ${pDate.slice(5)} ${hoursToClock(pStart)}–${hoursToClock(pEnd)}`);
       } catch (err) {
         el.style.top = saved.top;
         el.style.height = saved.height;
-        if (timeEl) timeEl.textContent = `${entry.start}–${entry.end}`;
+        if (timeEl) timeEl.textContent = timeLabel(entry);
         useApp.getState().toast(err instanceof Error ? err.message : String(err));
       } finally {
         el.style.transform = "";
@@ -234,7 +242,7 @@ export function CalendarView() {
 
   const byDay = useMemo(() => {
     const m = new Map<string, TimeEntry[]>();
-    for (const e of entries) if (e.start && e.end) (m.get(e.date) ?? m.set(e.date, []).get(e.date)!).push(e);
+    for (const e of entries) if (e.start) (m.get(e.date) ?? m.set(e.date, []).get(e.date)!).push(e);
     return m;
   }, [entries]);
 
@@ -259,7 +267,7 @@ export function CalendarView() {
         </div>
         {days.map((date) => {
           const dayEntries = byDay.get(date) ?? [];
-          const layout = layoutDay(dayEntries.map((e) => ({ id: e.id, start: clockToHours(e.start!), end: clockToHours(e.end!) })));
+          const layout = layoutDay(dayEntries.map((e) => ({ id: e.id, start: clockToHours(e.start!), end: endHours(e) })));
           return (
             <div
               key={date}
@@ -282,31 +290,33 @@ export function CalendarView() {
               {dayEntries.map((entry) => {
                 const task = taskById.get(entry.taskId);
                 const s = clockToHours(entry.start!);
-                const en = clockToHours(entry.end!);
+                const en = endHours(entry);
+                const open = !entry.end;
                 const slot = layout[entry.id] ?? { col: 0, cols: 1 };
                 const w = 100 / slot.cols;
                 return (
                   <div
                     key={entry.id}
                     data-id={entry.id}
-                    className={`cal-block${task?.statusDone ? " done" : ""}${chosen.has(entry.id) ? " selected" : ""}`}
+                    className={`cal-block${task?.statusDone ? " done" : ""}${open ? " open" : ""}${chosen.has(entry.id) ? " selected" : ""}`}
                     onDoubleClick={() => openEdit(entry.id)}
                     style={{ top: s * HOUR_H, height: Math.max(20, (en - s) * HOUR_H - 3), left: `calc(${slot.col * w}% + 2px)`, width: `calc(${w}% - 4px)` }}
-                    title={`${entry.taskTitle}\n${entry.start}–${entry.end}${entry.workType ? " · " + entry.workType : ""}${entry.content ? "\n" + entry.content : ""}\n拖中间挪动、拖边缘改时长；单击选中（Ctrl/Shift 叠加），双击或点 ✎ 编辑`}
+                    title={`${entry.taskTitle}\n${timeLabel(entry)}${entry.workType ? " · " + entry.workType : ""}${entry.content ? "\n" + entry.content : ""}\n${open ? "还没设结束时间（进行中），色块高度只是示意；把下边缘往下拖就是设定结束时间" : "拖中间挪动、拖边缘改时长"}；单击选中（Ctrl/Shift 叠加），双击或点 ✎ 编辑`}
                     onPointerDown={(e) => {
                       if ((e.target as HTMLElement).closest(".cal-block-edit")) return;
                       const handle = (e.target as HTMLElement).closest<HTMLElement>(".cal-block-handle");
                       startPointer(e, entry, handle ? (handle.dataset.h as DragMode) : "move");
                     }}
                   >
-                    <div className="cal-block-handle" data-h="top" style={{ top: -4 }} />
+                    {!open && <div className="cal-block-handle" data-h="top" style={{ top: -4 }} />}
                     <div className="cal-block-body">
                       <div className="b-title">
                         <span className={`kind-dot ${task?.kind === "routine" ? "kind-routine" : "kind-requirement"}`} />
                         {entry.taskTitle}
                       </div>
                       <div className="b-time tnum">
-                        {entry.start}–{entry.end}
+                        {open && <span className="open-pill">进行中</span>}
+                        <span className="b-range">{timeLabel(entry)}</span>
                       </div>
                     </div>
                     <button type="button" className="cal-block-edit" title="编辑这条记录" onPointerDown={(e) => e.stopPropagation()} onClick={() => openEdit(entry.id)}>

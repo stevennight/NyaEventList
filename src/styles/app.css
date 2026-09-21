@@ -921,3 +921,16 @@ textarea {
   left: auto;
   right: 0;
 }
+
+/* 流水里“进行中”（没设结束时间）的记录：用时那格显示一个小标签 */
+.open-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}

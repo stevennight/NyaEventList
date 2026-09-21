@@ -23,7 +23,7 @@ export function toExportRows(entries: TimeEntry[], tasks: Task[]): ExportRow[] {
         日期: e.date,
         开始时间: e.start ?? "",
         结束时间: e.end ?? "",
-        用时: e.durationHours,
+        用时: e.end ? e.durationHours : "", // 进行中的记录还没有用时
         系统: t?.system ?? "",
         需求方: t?.requesters.join("、") ?? "",
       };

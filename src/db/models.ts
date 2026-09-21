@@ -84,9 +84,11 @@ export interface EntryInput {
   taskId: string;
   date: string;
   start: string;
-  end: string;
+  /** 不填（null）表示“进行中”：还没结束，用时先记 0，等结束了再补 */
+  end?: string | null;
   workType?: string | null;
   content?: string;
 }
 
-export type EntryPatch = Partial<Omit<EntryInput, "start" | "end">> & { start?: string; end?: string };
+/** end 不传 = 不改；传 null = 清空结束时间（改回进行中） */
+export type EntryPatch = Partial<Omit<EntryInput, "start" | "end">> & { start?: string; end?: string | null };

@@ -546,3 +546,44 @@
   top: auto;
   bottom: calc(100% + 4px);
 }
+
+/* 进行中（没设结束时间）：虚线 + 斜纹，一眼能和“已结束”的区分开；高度只是示意 */
+.cal-block.open {
+  border-style: dashed;
+  background: repeating-linear-gradient(135deg, var(--accent-soft) 0, var(--accent-soft) 6px, var(--surface) 6px, var(--surface) 12px);
+}
+.cal-block.open.done {
+  background: repeating-linear-gradient(135deg, var(--status-done-soft) 0, var(--status-done-soft) 6px, var(--surface) 6px, var(--surface) 12px);
+}
+.cal-block.open .b-time {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 进行中的块：标题只占一行，下面一行永远有“进行中”标签（列窄时时间被挤掉也不影响识别） */
+.cal-block.open .cal-block-body {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+.cal-block.open .b-title {
+  -webkit-line-clamp: 1;
+}
+.cal-block.open .b-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.open-pill {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-body);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+}
