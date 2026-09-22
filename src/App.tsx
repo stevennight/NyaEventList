@@ -11,6 +11,7 @@ import { EntryFormModal } from "./features/schedule/EntryFormModal";
 import { TaskPanel } from "./features/tasks/TaskPanel";
 import { ImportView } from "./features/import/ImportView";
 import { LogView } from "./features/log/LogView";
+import { LogQueryView } from "./features/logQuery/LogQueryView";
 import { TaskFormModal } from "./features/tasks/TaskFormModal";
 import { addDays, fmtDate, parseISODate } from "./lib/time";
 import { todayStr, useApp, weekEndOf, weekStartFor, type Screen } from "./store";
@@ -74,6 +75,7 @@ function Toast() {
 
 const SCREENS: { key: Screen; label: string; title: string }[] = [
   { key: "log", label: "流水", title: "流水录入" },
+  { key: "logQuery", label: "查询", title: "流水查询" },
   { key: "schedule", label: "日程", title: "日程" },
   { key: "board", label: "看板", title: "进度看板" },
   { key: "stats", label: "统计", title: "统计与导出" },
@@ -97,6 +99,8 @@ function renderScreen(screen: Screen) {
       );
     case "board":
       return <BoardView />;
+    case "logQuery":
+      return scrolling(<LogQueryView />);
     case "stats":
       return scrolling(<StatsView />);
     case "dictionaries":

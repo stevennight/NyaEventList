@@ -20,7 +20,7 @@ export const getDb = () => database;
 /** 日程页的两种看法：整周，或者只看某一天（单列铺满，右边列出当天明细） */
 export type ScheduleView = "week" | "day";
 
-export type Screen = "log" | "schedule" | "board" | "stats" | "dictionaries" | "import" | "settings";
+export type Screen = "log" | "logQuery" | "schedule" | "board" | "stats" | "dictionaries" | "import" | "settings";
 
 /** 时间记录表单：新建（带预填的日期/时间/任务）或编辑当前周里已有的一条 */
 export type EntryFormState = { mode: "create"; defaults: { taskId?: string; date: string; start: string; end: string } } | { mode: "edit"; id: string };

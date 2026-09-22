@@ -8,26 +8,27 @@ import type { Task, TimeEntry } from "../../db/models";
 export const EXPORT_COLUMNS = ["编号", "标题", "例行工作内容划分", "例行工作工作内容", "工作内容", "日期", "开始时间", "结束时间", "用时", "系统", "需求方"] as const;
 export type ExportRow = Record<(typeof EXPORT_COLUMNS)[number], string | number>;
 
+/** 单条记录变成一行导出数据；`byId` 是任务表按 id 建的索引，调用方按需自己建（重复调用别每次都重建） */
+export function toExportRow(e: TimeEntry, byId: Map<string, Task>): ExportRow {
+  const t = byId.get(e.taskId);
+  return {
+    编号: t?.code ?? "",
+    标题: e.taskTitle,
+    例行工作内容划分: t?.category ?? "",
+    例行工作工作内容: e.workType ?? "",
+    工作内容: e.content,
+    日期: e.date,
+    开始时间: e.start ?? "",
+    结束时间: e.end ?? "",
+    用时: e.end ? e.durationHours : "", // 进行中的记录还没有用时
+    系统: t?.system ?? "",
+    需求方: t?.requesters.join("、") ?? "",
+  };
+}
+
 export function toExportRows(entries: TimeEntry[], tasks: Task[]): ExportRow[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  return [...entries]
-    .sort((a, b) => a.date.localeCompare(b.date) || (a.start ?? "").localeCompare(b.start ?? ""))
-    .map((e) => {
-      const t = byId.get(e.taskId);
-      return {
-        编号: t?.code ?? "",
-        标题: e.taskTitle,
-        例行工作内容划分: t?.category ?? "",
-        例行工作工作内容: e.workType ?? "",
-        工作内容: e.content,
-        日期: e.date,
-        开始时间: e.start ?? "",
-        结束时间: e.end ?? "",
-        用时: e.end ? e.durationHours : "", // 进行中的记录还没有用时
-        系统: t?.system ?? "",
-        需求方: t?.requesters.join("、") ?? "",
-      };
-    });
+  return [...entries].sort((a, b) => a.date.localeCompare(b.date) || (a.start ?? "").localeCompare(b.start ?? "")).map((e) => toExportRow(e, byId));
 }
 
 const cell = (v: string | number) => String(v).replace(/[\t\r\n]+/g, " ");

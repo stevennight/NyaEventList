@@ -27,7 +27,7 @@ export async function copyEntries(entries: TimeEntry[], format?: CopyFormat): Pr
 }
 
 /** 输入框里用户自己选了一段字，Ctrl+C 应该复制那段字，不该把整条记录复制走。分段日期/时间框的选中是自动的，不算。 */
-function hasOwnTextSelection(t: EventTarget | null): boolean {
+export function hasOwnTextSelection(t: EventTarget | null): boolean {
   if (t instanceof HTMLTextAreaElement) return t.selectionStart !== t.selectionEnd;
   if (t instanceof HTMLInputElement && !t.dataset.seg) return t.selectionStart !== null && t.selectionStart !== t.selectionEnd;
   return false;

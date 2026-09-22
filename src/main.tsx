@@ -7,6 +7,7 @@ import "./styles/dictionaries.css";
 import "./styles/board.css";
 import "./styles/stats.css";
 import "./styles/selection.css";
+import "./styles/logQuery.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

@@ -406,6 +406,26 @@ export function createRepos(db: Db) {
       const rows = await db.select<Row>(`${ENTRY_SELECT} WHERE e.id = ?`, [id]);
       return rows[0] ? mapEntry(rows[0]) : null;
     },
+    /** 按任务/日期区间筛选，用于"流水查询"；不传 taskIds 或 from/to 就不加对应条件，都不传就是全部记录 */
+    async search(filter: { taskIds?: string[]; from?: string; to?: string }): Promise<TimeEntry[]> {
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (filter.from) {
+        where.push("e.entry_date >= ?");
+        params.push(filter.from);
+      }
+      if (filter.to) {
+        where.push("e.entry_date <= ?");
+        params.push(filter.to);
+      }
+      if (filter.taskIds?.length) {
+        where.push(`e.task_id IN (${marks(filter.taskIds)})`);
+        params.push(...filter.taskIds);
+      }
+      const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const rows = await db.select<Row>(`${ENTRY_SELECT} ${clause} ORDER BY e.entry_date, e.start_time, e.created_at`, params);
+      return rows.map(mapEntry);
+    },
     async create(input: EntryInput): Promise<string> {
       const end = input.end || null;
       assertValidRange(input.start, end);
