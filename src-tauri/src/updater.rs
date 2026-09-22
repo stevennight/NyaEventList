@@ -689,10 +689,21 @@ fn launch_installer(path: &Path) -> Result<(), String> {
         .unwrap_or_default();
     let mut command = if extension.eq_ignore_ascii_case("msi") {
         let mut command = Command::new("msiexec.exe");
-        command.arg("/i").arg(path);
+        // /passive shows a progress bar but needs no clicks, and skips the
+        // "an earlier version is installed" prompt that the full UI shows.
+        command
+            .arg("/i")
+            .arg(path)
+            .arg("/passive")
+            .arg("/promptrestart");
         command
     } else if extension.eq_ignore_ascii_case("exe") {
-        Command::new(path)
+        let mut command = Command::new(path);
+        // Same as Tauri's own updater: /P is passive mode, /UPDATE tells the
+        // NSIS installer this is an in-place update so it upgrades over the
+        // existing install instead of asking the user to uninstall first.
+        command.arg("/P").arg("/UPDATE");
+        command
     } else {
         return Err("The downloaded update is not a supported Windows installer.".to_string());
     };
