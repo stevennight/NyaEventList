@@ -295,6 +295,9 @@ textarea {
 .log-table .c-task {
   width: 26%;
 }
+.log-table .c-task .combo-input {
+  padding-right: 34px; /* 给状态点和编辑按钮留出空间，不然标题长了会被盖住 */
+}
 .log-table .c-type {
   width: 120px;
 }
@@ -957,4 +960,20 @@ textarea {
 .view-switch button.active {
   background: var(--ink);
   color: var(--bg);
+}
+
+/* ---------- 流水里任务名旁边的状态标识：一眼看出这个任务当前的状态，方便发现忘了挪状态的任务 ---------- */
+.task-status-dot {
+  position: absolute;
+  right: 29px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: default;
+}
+.task-status-dot.status-done {
+  background: var(--status-done);
 }

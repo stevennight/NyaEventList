@@ -393,6 +393,7 @@ export function LogView() {
       end: e ? (e.end ?? "") : draft.end,
     };
     const dur = e ? e.durationHours : normTime(v.start) && normTime(v.end) ? durationHours(normTime(v.start)!, normTime(v.end)!) : 0;
+    const task = taskById(v.task);
     const seg = (field: "date" | "start" | "end") => (
       <SegmentedField
         bare
@@ -417,7 +418,7 @@ export function LogView() {
           <SelectOrCreate
             key={comboTick}
             items={taskItems}
-            value={taskById(v.task)?.title ?? ""}
+            value={task?.title ?? ""}
             placeholder={isDraft ? "搜索任务：标题 / 编号 / 系统 / 需求方" : ""}
             className="log-in"
             matcher={taskMatcher}
@@ -436,6 +437,7 @@ export function LogView() {
               });
             }}
           />
+          {task?.status && <span className={`task-status-dot ${task.statusDone ? "status-done" : "status-progress"}`} title={`当前状态：${task.status}`} />}
           {v.task && (
             <button type="button" className="task-edit" tabIndex={-1} title="编辑这个任务" onClick={() => useApp.getState().openTaskForm({ mode: "edit", id: v.task })}>
               ✎
