@@ -1,6 +1,6 @@
+/* 这页是宽表格（12 列），跟别的板块不一样，不设 max-width——留白让列宽和列数一起吃掉才划算 */
 .lq-wrap {
   padding: 20px 24px 90px;
-  max-width: 1400px;
 }
 .lq-bar {
   display: flex;
@@ -35,8 +35,15 @@
   color: var(--ink-dim);
   margin-bottom: 10px;
 }
+/* 12 列，宽屏时用 width:100% 把多出来的空间摊给各列；窄屏靠 min-width 撑开，
+   表头/单元格强制不换行，宽度不够就交给 .scroll 横向滚动——总比表头被挤成竖排字好 */
 .lq-table {
   width: 100%;
+  min-width: 1100px;
+}
+.lq-table th,
+.lq-table td {
+  white-space: nowrap;
 }
 .lq-table th.c-num,
 .lq-table td.c-num {
