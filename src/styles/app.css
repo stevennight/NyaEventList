@@ -297,6 +297,19 @@ textarea {
 }
 .log-table .c-task .combo-input {
   padding-right: 34px; /* 给状态点和编辑按钮留出空间，不然标题长了会被盖住 */
+  padding-left: 26px; /* 给左边的需求/非需求角标留空间 */
+}
+/* 流水里任务名左边的需求/非需求角标：加任务加快了容易选错类型，一眼能看出来方便发现 */
+.task-kind-mark {
+  position: absolute;
+  left: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.task-kind-mark .kind-badge {
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
 }
 .log-table .c-type {
   width: 120px;

@@ -9,6 +9,7 @@ import { SelectOrCreate, type ComboItem } from "../../shared/SelectOrCreate";
 import { getRepos, todayStr, useApp, weekEndOf, weekStartFor } from "../../store";
 import { clickSelect, EMPTY_SELECTION, extendSelection, marqueeSelect, rangeIds, selectAll } from "../selection/selection";
 import { SelectionBar } from "../selection/SelectionBar";
+import { KindBadge } from "../tasks/TaskPanel";
 import { matchesQuery, sortTasksForPicker, taskSearchText } from "../tasks/taskSearch";
 import { CROSS_DAY_MSG, LOG_FIELDS, nextDraft, parsePastedText, resolveTask, type Draft, type LogField } from "./logModel";
 
@@ -49,7 +50,9 @@ function TextCell(props: { value: string; placeholder?: string; alwaysCommit?: b
 }
 
 export function LogView() {
-  const { tasks, workTypes, entries, weekStart, mode, selection } = useApp(useShallow((s) => ({ tasks: s.tasks, workTypes: s.workTypes, entries: s.entries, weekStart: s.weekStart, mode: s.mode, selection: s.selection })));
+  const { tasks, workTypes, entries, weekStart, scheduleView, dayDate, mode, selection } = useApp(
+    useShallow((s) => ({ tasks: s.tasks, workTypes: s.workTypes, entries: s.entries, weekStart: s.weekStart, scheduleView: s.scheduleView, dayDate: s.dayDate, mode: s.mode, selection: s.selection })),
+  );
   const toast = useApp((s) => s.toast);
   const setSelection = useApp((s) => s.setSelection);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -58,7 +61,14 @@ export function LogView() {
   const [comboTick, setComboTick] = useState(0); // 新建任务被取消时，让任务格丢掉敲了一半的文字
 
   const weekEnd = weekEndOf(weekStart);
-  const [draft, setDraftState] = useState<Draft>(() => nextDraft(entries.at(-1), todayStr(), weekStart, weekEnd));
+  const dayMode = scheduleView === "day";
+  /** 日视图只画当天的行；数据还是整周一起取的（跟日程页一个逻辑），这里只是渲染层面的过滤 */
+  const visible = useMemo(() => (dayMode ? entries.filter((e) => e.date === dayDate) : entries), [entries, dayMode, dayDate]);
+  /** 日期越界到别的周/天时要不要跳，以及怎么跳——编辑单行、保存草稿、粘贴三处共用 */
+  const dateOutOfView = (date: string) => (dayMode ? date !== dayDate : date < weekStart || date > weekEnd);
+  const jumpToDate = (date: string) => (dayMode ? useApp.getState().setDay(date) : useApp.getState().setWeek(weekStartFor(date)));
+
+  const [draft, setDraftState] = useState<Draft>(() => nextDraft(visible.at(-1), todayStr(), dayMode ? dayDate : weekStart, dayMode ? dayDate : weekEnd));
   const draftRef = useRef(draft);
   const patchDraft = (p: Partial<Draft>) => {
     draftRef.current = { ...draftRef.current, ...p };
@@ -68,17 +78,18 @@ export function LogView() {
     draftRef.current = d;
     setDraftState(d);
   };
-  const draftWeek = useRef(weekStart);
+  const period = dayMode ? dayDate : weekStart;
+  const draftPeriod = useRef(period);
   useEffect(() => {
-    // 只在真的换了周时重置草稿；同一周内录入产生的 entries 变化由 commitDraft 自己接续草稿。
+    // 只在真的换了周/天时重置草稿；同一周/天内录入产生的 entries 变化由 commitDraft 自己接续草稿。
     // （板块被隐藏再显示时这个副作用会重新跑一遍，所以要比较，不能无条件重置，否则写到一半的草稿会丢）
-    if (draftWeek.current === weekStart) return;
-    draftWeek.current = weekStart;
-    resetDraft(nextDraft(entries.at(-1), todayStr(), weekStart, weekEnd));
+    if (draftPeriod.current === period) return;
+    draftPeriod.current = period;
+    resetDraft(nextDraft(visible.at(-1), todayStr(), dayMode ? dayDate : weekStart, dayMode ? dayDate : weekEnd));
     setProblem(null);
     setNotice("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekStart]);
+  }, [period]);
 
   const pickerTasks = useMemo(() => sortTasksForPicker(tasks), [tasks]);
   const taskItems: ComboItem[] = useMemo(() => pickerTasks.map((t) => ({ id: t.id, label: t.title, sub: `${t.code ? t.code + " · " : ""}${t.system ?? ""}`, search: taskSearchText(t) })), [pickerTasks]);
@@ -106,13 +117,13 @@ export function LogView() {
     td?.focus();
     td?.scrollIntoView({ block: "nearest" });
   };
-  const rowKeys = () => [...entries.map((e) => e.id), DRAFT];
-  const order = useMemo(() => entries.map((e) => e.id), [entries]);
+  const rowKeys = () => [...visible.map((e) => e.id), DRAFT];
+  const order = useMemo(() => visible.map((e) => e.id), [visible]);
 
   /* ---------- 读取/写入某一格 ---------- */
   const fieldValue = (row: string, field: LogField): string => {
     if (row === DRAFT) return draftRef.current[FIELD_TO_DRAFT_KEY[field]];
-    const e = entries.find((x) => x.id === row);
+    const e = visible.find((x) => x.id === row);
     if (!e) return "";
     return { task: e.taskId, type: e.workType ?? "", content: e.content, date: e.date, start: e.start ?? "", end: e.end ?? "" }[field];
   };
@@ -127,9 +138,9 @@ export function LogView() {
     try {
       await useApp.getState().updateEntry(row, patch);
       clearProblem();
-      if (field === "date" && (value < weekStart || value > weekEnd)) {
-        toast(`已移到 ${value} 所在的那一周`);
-        await useApp.getState().setWeek(weekStartFor(value));
+      if (field === "date" && dateOutOfView(value)) {
+        toast(dayMode ? `已跳到 ${value}` : `已移到 ${value} 所在的那一周`);
+        await jumpToDate(value);
       }
       return true;
     } catch (e) {
@@ -180,7 +191,7 @@ export function LogView() {
       }
     }
     if (!d.taskId) return failDraft("task", "先选一个任务：直接打字搜索标题、编号、系统或需求方都行。");
-    const nd = normDate(d.date, yearOf(weekStart));
+    const nd = normDate(d.date, yearOf(dayMode ? dayDate : weekStart));
     if (!nd) return failDraft("date", "日期没填完整；Ctrl+; 直接填今天。");
     const ns = normTime(d.start);
     const ne = normTime(d.end);
@@ -190,7 +201,7 @@ export function LogView() {
     } catch (e) {
       return failDraft("end", errText(e));
     }
-    if (nd < weekStart || nd > weekEnd) await useApp.getState().setWeek(weekStartFor(nd));
+    if (dateOutOfView(nd)) await jumpToDate(nd);
     resetDraft({ taskId: "", type: d.type, content: "", date: nd, start: !ne || ne === "24:00" ? "" : ne, end: "" });
     toast(ne ? `已记录 ${ns}–${ne}` : `已记录 ${ns} 起，结束时间留空，记为进行中（之后在结束格补上）`);
     requestAnimationFrame(() => focusCell(DRAFT, "task"));
@@ -342,7 +353,7 @@ export function LogView() {
     const ok = inputs.length;
     const lastDate = inputs.at(-1)?.date;
     if (ok) await useApp.getState().createEntries(inputs);
-    if (ok && lastDate && (lastDate < weekStart || lastDate > weekEnd)) await useApp.getState().setWeek(weekStartFor(lastDate));
+    if (ok && lastDate && dateOutOfView(lastDate)) await jumpToDate(lastDate);
     setNotice(skipped.length ? `已粘贴 ${ok} 行；跳过：${skipped.join("；")}` : "");
     toast(`已粘贴 ${ok} 行${skipped.length ? `，跳过 ${skipped.length} 行` : ""}${ok ? "，记得核对日期和时间" : ""}`);
   };
@@ -378,7 +389,7 @@ export function LogView() {
   };
   const chosen = useMemo(() => new Set(selection.ids), [selection.ids]);
 
-  const total = entries.reduce((s, e) => s + e.durationHours, 0);
+  const total = visible.reduce((s, e) => s + e.durationHours, 0);
   const cellClass = (row: string, field: LogField) => (problem && problem.row === row && problem.field === field ? "invalid" : undefined);
 
   const renderRow = (e: TimeEntry | null, label: string | number) => {
@@ -415,6 +426,11 @@ export function LogView() {
           {label}
         </td>
         <td className={`c-task ${cellClass(row, "task") ?? ""}`} data-field="task">
+          {task && (
+            <span className="task-kind-mark">
+              <KindBadge kind={task.kind} />
+            </span>
+          )}
           <SelectOrCreate
             key={comboTick}
             items={taskItems}
@@ -479,7 +495,7 @@ export function LogView() {
     );
   };
 
-  const allChosen = entries.length > 0 && selection.ids.length === entries.length;
+  const allChosen = visible.length > 0 && selection.ids.length === visible.length;
 
   return (
     <div className="log-wrap" ref={rootRef} onKeyDown={onKeyDown} onPaste={(e) => void onPaste(e)}>
@@ -509,7 +525,7 @@ export function LogView() {
       <table className="log-table">
         <thead>
           <tr>
-            <th className="c-num pick-all" title={allChosen ? "取消全选" : "选中这一周的全部记录（Ctrl+A）"} onClick={() => setSelection(allChosen ? EMPTY_SELECTION : selectAll(order))}>
+            <th className="c-num pick-all" title={allChosen ? "取消全选" : `选中${dayMode ? "当天" : "这一周"}的全部记录（Ctrl+A）`} onClick={() => setSelection(allChosen ? EMPTY_SELECTION : selectAll(order))}>
               #
             </th>
             <th className="c-task">任务</th>
@@ -523,13 +539,13 @@ export function LogView() {
           </tr>
         </thead>
         <tbody>
-          {entries.map((e, i) => renderRow(e, i + 1))}
+          {visible.map((e, i) => renderRow(e, i + 1))}
           {renderRow(null, "＋")}
         </tbody>
       </table>
       <div className="log-msg">{problem?.msg ?? notice}</div>
       <div className="log-foot tnum">
-        本周 {entries.length} 条 · 共 {total.toFixed(2)} h
+        {dayMode ? "当天" : "本周"} {visible.length} 条 · 共 {total.toFixed(2)} h
       </div>
       <SelectionBar />
     </div>

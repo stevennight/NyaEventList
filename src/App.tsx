@@ -18,11 +18,11 @@ import { todayStr, useApp, weekEndOf, weekStartFor, type Screen } from "./store"
 
 const DOW_NAMES = ["一", "二", "三", "四", "五", "六", "日"];
 
-/** 流水页和日程页顶栏左边的时间导航。日程页多一个“周 / 日”切换，选“日”时按天前后翻。 */
-function WeekBar({ withViews }: { withViews: boolean }) {
-  const { weekStart, view, dayDate } = useApp(useShallow((s) => ({ weekStart: s.weekStart, view: s.scheduleView, dayDate: s.dayDate })));
+/** 流水页和日程页顶栏左边的时间导航，带“周 / 日”切换，选“日”时按天前后翻。周/日和当前日期是两页共用的同一份状态，切一边另一边跟着变。 */
+function WeekBar() {
+  const { weekStart, view, dayDate, screen } = useApp(useShallow((s) => ({ weekStart: s.weekStart, view: s.scheduleView, dayDate: s.dayDate, screen: s.screen })));
   const { setWeek, setDay, setScheduleView } = useApp.getState();
-  const day = withViews && view === "day";
+  const day = view === "day";
   const end = weekEndOf(weekStart);
   const fmt = (iso: string) => {
     const d = parseISODate(iso);
@@ -42,15 +42,20 @@ function WeekBar({ withViews }: { withViews: boolean }) {
       <button type="button" className="today-btn" onClick={() => (day ? void setDay(todayStr()) : void setWeek(weekStartFor(todayStr())))}>
         {day ? "今天" : "本周"}
       </button>
-      {withViews && (
-        <div className="view-switch" role="group" aria-label="日程视图">
-          {(["week", "day"] as const).map((v) => (
-            <button key={v} type="button" className={view === v ? "active" : ""} aria-pressed={view === v} title={v === "week" ? "看整周" : "只看一天：单列铺满，右边列出当天全部记录"} onClick={() => setScheduleView(v)}>
-              {v === "week" ? "周" : "日"}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="view-switch" role="group" aria-label="周 / 日视图">
+        {(["week", "day"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            className={view === v ? "active" : ""}
+            aria-pressed={view === v}
+            title={v === "week" ? "看整周" : screen === "schedule" ? "只看一天：单列铺满，右边列出当天全部记录" : "只看一天，不用在一周的记录里翻"}
+            onClick={() => setScheduleView(v)}
+          >
+            {v === "week" ? "周" : "日"}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -174,7 +179,7 @@ export default function App() {
       </nav>
       <div className="shell">
         <header className="topbar">
-          {(screen === "log" || screen === "schedule") && <WeekBar withViews={screen === "schedule"} />}
+          {(screen === "log" || screen === "schedule") && <WeekBar />}
           <div className="topbar-center">
             <strong>{SCREENS.find((s) => s.key === screen)!.title}</strong>
           </div>
