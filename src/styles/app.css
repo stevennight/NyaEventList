@@ -343,6 +343,17 @@ textarea {
   outline: none;
   color: var(--ink);
 }
+/* 具体内容是多行文字框：高度由 TextCell 按内容撑开，太长了就在格子里滚动，别把一行撑到一屏高 */
+textarea.log-in.log-multi {
+  display: block;
+  resize: none;
+  overflow-y: auto;
+  max-height: 220px;
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .log-in:focus,
 .log-table .combo-input:focus {
   box-shadow: inset 0 0 0 2px var(--accent);

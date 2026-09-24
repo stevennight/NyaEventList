@@ -1,5 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { EntryInput, Task, TimeEntry } from "../../db/models";
 import { EntryValidationError } from "../../db/repos";
 import { seedDemo } from "../../db/seedDemo";
@@ -24,29 +24,52 @@ interface Problem {
 
 const yearOf = (weekStart: string) => Number(weekStart.slice(0, 4));
 
-/** 纯文字的格子（具体内容） */
+/** 多行文字的格子（具体内容）：高度跟着内容长，Shift/Alt+Enter 换行，普通 Enter 仍然是表格里的“下一格” */
 function TextCell(props: { value: string; placeholder?: string; alwaysCommit?: boolean; onInput?(text: string): void; onCommit(text: string): void }) {
   const { value, placeholder, alwaysCommit, onInput, onCommit } = props;
   const [text, setText] = useState(value);
+  const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => setText(value), [value]);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
+  const change = (next: string) => {
+    setText(next);
+    onInput?.(next);
+  };
   return (
-    <input
-      className="log-in"
-      type="text"
+    <textarea
+      ref={ref}
+      className="log-in log-multi"
+      rows={1}
       placeholder={placeholder}
       value={text}
-      onChange={(e) => {
-        setText(e.target.value);
-        onInput?.(e.target.value);
-      }}
+      onChange={(e) => change(e.target.value)}
       onBlur={() => {
         if (alwaysCommit || text !== value) onCommit(text);
       }}
       onKeyDown={(e) => {
         if (e.key === "Escape") setText(value);
+        else if (e.key === "Enter" && e.altKey && !e.ctrlKey && !e.metaKey) {
+          // Alt+Enter 是 Excel 里单元格内换行的习惯，textarea 默认不认，手动插一个
+          e.preventDefault();
+          const el = e.currentTarget;
+          el.setRangeText("\n", el.selectionStart, el.selectionEnd, "end");
+          change(el.value);
+        }
       }}
     />
   );
+}
+
+/** 光标在多行文字框中间的行上时，↑/↓ 应该在文字里移动，而不是跳到上/下一行记录 */
+function caretMovesWithinText(target: HTMLElement, key: string): boolean {
+  if (!(target instanceof HTMLTextAreaElement)) return false;
+  const { value, selectionStart, selectionEnd } = target;
+  return key === "ArrowUp" ? value.slice(0, selectionStart).includes("\n") : value.slice(selectionEnd).includes("\n");
 }
 
 export function LogView() {
@@ -105,7 +128,7 @@ export function LogView() {
   const errText = (e: unknown) => (e instanceof EntryValidationError ? CROSS_DAY_MSG : e instanceof Error ? e.message : String(e));
 
   const focusCell = (row: string, field: LogField) => {
-    const inp = rootRef.current?.querySelector<HTMLInputElement>(`[data-row="${row}"] [data-field="${field}"] input`);
+    const inp = rootRef.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-row="${row}"] [data-field="${field}"] :is(input, textarea)`);
     if (inp) {
       inp.focus();
       inp.select();
@@ -230,7 +253,7 @@ export function LogView() {
     const mods = { shift: e.shiftKey, ctrl };
 
     /* 行的选择：Shift+↑↓ 扩选，Ctrl+A 全选（不在输入框里时），Esc 取消，空格选/取消这一行 */
-    if (!isDraft && e.shiftKey && !ctrl && (e.key === "ArrowUp" || e.key === "ArrowDown") && field !== "task" && field !== "type") {
+    if (!isDraft && e.shiftKey && !ctrl && (e.key === "ArrowUp" || e.key === "ArrowDown") && field !== "task" && field !== "type" && !caretMovesWithinText(target, e.key)) {
       e.preventDefault();
       const r = extendSelection(order, selection, row, e.key === "ArrowDown" ? 1 : -1);
       setSelection(r.state);
@@ -291,6 +314,7 @@ export function LogView() {
     if (ctrl || e.altKey) return;
     const keys = rowKeys();
     if (e.key === "Enter") {
+      if (field === "content" && e.shiftKey) return; // 让文字框自己换行
       e.preventDefault();
       if (isDraft) {
         if (field === "end") void commitDraft();
@@ -300,7 +324,7 @@ export function LogView() {
       }
       return;
     }
-    if (field !== "task" && field !== "type" && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+    if (field !== "task" && field !== "type" && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && !caretMovesWithinText(target, e.key)) {
       const sib = keys[keys.indexOf(row) + (e.key === "ArrowDown" ? 1 : -1)];
       if (sib) {
         e.preventDefault();
@@ -313,6 +337,9 @@ export function LogView() {
   const onPaste = async (e: React.ClipboardEvent) => {
     const text = e.clipboardData.getData("text");
     if (!text || (!text.includes("\t") && !text.includes("\n") && !text.trimStart().startsWith("["))) return;
+    // 往内容格里粘一段多行文字（没有制表符、不是 JSON）就是普通粘贴，不当成批量粘贴记录
+    const inContent = (e.target as HTMLElement).closest?.('[data-field="content"]');
+    if (inContent && !text.includes("\t") && !text.trimStart().startsWith("[")) return;
     const parsed = parsePastedText(text);
     if (!parsed.length) return;
     e.preventDefault();
@@ -501,7 +528,7 @@ export function LogView() {
     <div className="log-wrap" ref={rootRef} onKeyDown={onKeyDown} onPaste={(e) => void onPaste(e)}>
       <div className="log-hint">
         <kbd>Tab</kbd> 换格 · 日期/时间直接敲数字，敲满自动跳下一段/下一格 · <kbd>Ctrl</kbd>+<kbd>;</kbd> 填今天/现在（按当前格的类型） · <kbd>Ctrl</kbd>+<kbd>D</kbd> 复制上一行同一格 · <kbd>Ctrl</kbd>+<kbd>Enter</kbd>{" "}
-        保存并新开一行 · 点行号选中（<kbd>Ctrl</kbd> 加选、<kbd>Shift</kbd> 选区间、上下拖动框选、<kbd>Shift</kbd>+<kbd>↑↓</kbd> 扩选），<kbd>Ctrl</kbd>+<kbd>C</kbd> 复制，Excel 明细行也能直接粘进来 · 结束时间可以先空着，记为“进行中”，之后补上
+        保存并新开一行 · 点行号选中（<kbd>Ctrl</kbd> 加选、<kbd>Shift</kbd> 选区间、上下拖动框选、<kbd>Shift</kbd>+<kbd>↑↓</kbd> 扩选），<kbd>Ctrl</kbd>+<kbd>C</kbd> 复制，Excel 明细行也能直接粘进来 · 具体内容里 <kbd>Shift</kbd>/<kbd>Alt</kbd>+<kbd>Enter</kbd> 换行 · 结束时间可以先空着，记为“进行中”，之后补上
       </div>
       {tasks.length === 0 && (
         <div className="empty-note">
