@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DictionaryError } from "../../db/repos";
+import { matchesQuery } from "../../lib/search";
 import { getRepos, useApp } from "../../store";
 import type { TaskFilters } from "../tasks/taskFilters";
 
@@ -78,8 +79,7 @@ export function DictionaryView() {
   };
 
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = rows.filter((r) => (!q || r.name.toLowerCase().includes(q)) && (!unusedOnly || r.usage === 0));
+    const list = rows.filter((r) => matchesQuery(r.name, query) && (!unusedOnly || r.usage === 0));
     if (sort === "usage") return [...list].sort((a, b) => b.usage - a.usage || a.name.localeCompare(b.name, "zh"));
     if (sort === "name") return [...list].sort((a, b) => a.name.localeCompare(b.name, "zh"));
     return list;

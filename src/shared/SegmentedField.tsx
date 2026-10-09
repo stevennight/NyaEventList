@@ -57,6 +57,9 @@ export function SegmentedField(props: SegmentedFieldProps) {
   const fresh = useRef(true); // 刚选中这一段：敲的数字替换整段
   const [focused, setFocused] = useState(false);
   const [open, setOpen] = useState(false);
+  /** 进入这个框时的样子：Ctrl+Z 只把这个框还原回去（像 Excel 编辑单元格时），不去撤别的；还原前的样子留给 Ctrl+Y */
+  const enteredParts = useRef<string[] | null>(null);
+  const undoneParts = useRef<string[] | null>(null);
 
   const setParts = (next: string[]) => {
     partsRef.current = next;
@@ -69,7 +72,13 @@ export function SegmentedField(props: SegmentedFieldProps) {
 
   // 外面改了值（Ctrl+D、选月历、换一行……）就跟着变；自己敲出来的中间状态不动
   useEffect(() => {
-    if (valueFromParts(partsRef.current, kind, allow24) !== value) setParts(partsFromValue(value, kind, allow24));
+    if (valueFromParts(partsRef.current, kind, allow24) !== value) {
+      const next = partsFromValue(value, kind, allow24);
+      setParts(next);
+      // 外面改的（比如撤销把草稿换了）不算在这个框里打的字
+      if (enteredParts.current) enteredParts.current = next;
+      undoneParts.current = null;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, kind, allow24]);
 
@@ -105,6 +114,25 @@ export function SegmentedField(props: SegmentedFieldProps) {
     const k = realKey(e);
     const mod = e.ctrlKey || e.metaKey;
     // Ctrl+;（Ctrl+Shift+; 同义）：按这个输入框的类型填成当前日期/时间
+    // 在这个框里改过：Ctrl+Z 还原成进来时的样子、Ctrl+Y 再改回去；没改过就交给全局撤销
+    const lower = k.toLowerCase();
+    if (mod && !e.altKey && (lower === "z" || lower === "y")) {
+      const redo = lower === "y" || e.shiftKey;
+      const target = redo ? undoneParts.current : enteredParts.current;
+      if (target && target.join("|") !== partsRef.current.join("|")) {
+        e.preventDefault();
+        e.stopPropagation();
+        undoneParts.current = redo ? null : partsRef.current.slice();
+        emit(target);
+        // 光标回到第一个没填满的段，接着敲就是从头重填
+        const firstEmpty = target.findIndex((p, j) => p.length !== specs[j].len);
+        const at = firstEmpty < 0 ? i : firstEmpty;
+        fresh.current = true;
+        focusSeg(at);
+        requestAnimationFrame(() => inputs.current[at]?.select());
+      }
+      return;
+    }
     if (mod && (e.code === "Semicolon" || k === ";" || k === ":")) {
       e.preventDefault();
       e.stopPropagation();
@@ -186,10 +214,18 @@ export function SegmentedField(props: SegmentedFieldProps) {
       className={`seg-field${bare ? " bare" : ""}${bad ? " bad" : ""}`}
       role="group"
       aria-label={ariaLabel}
-      onFocus={() => setFocused(true)}
+      onFocus={(e) => {
+        setFocused(true);
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          enteredParts.current = partsRef.current.slice();
+          undoneParts.current = null;
+        }
+      }}
       onBlur={(e) => {
         if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
         setFocused(false);
+        enteredParts.current = null;
+        undoneParts.current = null;
         const tidy = tidyParts(partsRef.current, specs);
         emit(tidy);
         onCommit?.(valueFromParts(tidy, kind, allow24));

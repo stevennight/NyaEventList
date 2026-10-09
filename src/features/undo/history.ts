@@ -1,12 +1,23 @@
 import type { Snapshot } from "../../db/snapshots";
+import type { DraftSlot } from "../log/drafts";
+
+/** 流水页某一份草稿在这一步前后的样子 */
+export interface DraftChange {
+  key: string;
+  before: DraftSlot;
+  after: DraftSlot;
+}
 
 export interface UndoItem {
   /** 这一步原本做了什么，给按钮提示用 */
   label: string;
   undoMessage: string;
   redoMessage: string;
+  /** 库里的行改前/改后的样子；只改了草稿的步骤这两个是空快照 */
   before: Snapshot;
   after: Snapshot;
+  /** 这一步顺带（或者只）改了草稿：填草稿的一格、把草稿保存成记录 */
+  draft?: DraftChange;
 }
 
 export interface HistoryInfo {

@@ -3,9 +3,11 @@ import { createRepos, type BulkOptionField, type Repos, type RequesterBulkMode }
 import { openDatabase, isTauri } from "./db/open";
 import type { Db, DbMode } from "./db/types";
 import type { EntryInput, EntryPatch, OptionItem, Requester, Task, TaskInput, TimeEntry } from "./db/models";
-import type { CaptureIds } from "./db/snapshots";
+import { emptySnapshot, type CaptureIds } from "./db/snapshots";
+import { describeDraftStep, draftHasContent, parseDraftKey, persistableDrafts, restoreDrafts, sameDraft, type DraftSlot } from "./features/log/drafts";
+import type { Draft } from "./features/log/logModel";
 import { describeStep } from "./features/undo/describe";
-import { UndoHistory, type HistoryInfo } from "./features/undo/history";
+import { snapshotRows, UndoHistory, type DraftChange, type HistoryInfo } from "./features/undo/history";
 import { checkForApplicationUpdates, describeUpdateError, downloadAndInstallApplicationUpdate, type ApplicationUpdateState } from "./lib/appUpdates";
 import { addDays, fmtDate, weekStartOf } from "./lib/time";
 import type { CopyFormat } from "./features/export/rows";
@@ -51,6 +53,19 @@ const serial = <T>(fn: () => Promise<T>): Promise<T> => {
   queue = run.catch(() => undefined);
   return run;
 };
+/**
+ * 每份草稿最近一次记进撤销栈时的样子。草稿在打字时会一直变（每敲一个字都更新），
+ * 只有一格填完（失焦、选中、回车）才和这里比一下，变了就算一步。
+ */
+const draftMarks = new Map<string, DraftSlot>();
+
+/** 草稿存进数据库，关掉程序、闪退都不丢；打字时会频繁变，攒一下再写 */
+let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
+const saveDraftsSoon = () => {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(() => void repos?.settings.set("logDrafts", persistableDrafts(useApp.getState().drafts)), 300);
+};
+
 const mergeIds = (a: CaptureIds, b: CaptureIds): CaptureIds => ({
   tasks: [...(a.tasks ?? []), ...(b.tasks ?? [])],
   entries: [...(a.entries ?? []), ...(b.entries ?? [])],
@@ -86,6 +101,8 @@ interface AppState {
   scheduleView: ScheduleView;
   dayDate: string;
   entries: TimeEntry[];
+  /** 流水页的草稿行，每一天 / 每一周一份，key 见 features/log/drafts */
+  drafts: Record<string, DraftSlot>;
   toastMsg: string;
   toastSeq: number;
 
@@ -125,7 +142,8 @@ interface AppState {
   setScheduleView(view: ScheduleView): void;
   /** 切到某一天（跨周会一并换周） */
   setDay(date: string): Promise<void>;
-  createEntry(input: EntryInput): Promise<string>;
+  /** 保存一条记录；从草稿行保存时带上草稿保存前后的样子，撤销这一步会把内容放回草稿行 */
+  createEntry(input: EntryInput, draft?: DraftChange): Promise<string>;
   updateEntry(id: string, patch: EntryPatch): Promise<void>;
   removeEntry(id: string): Promise<void>;
   /** 一次建多条（粘贴用），撤销时一起撤 */
@@ -134,7 +152,17 @@ interface AppState {
    * 执行 run，并把它对 ids（以及 created 返回的新建行）造成的变化记进撤销栈。
    * 字典管理这类直接调 repos 的地方用它包一层。
    */
-  track<T>(ids: CaptureIds, run: () => Promise<T>, created?: (result: T) => CaptureIds): Promise<T>;
+  track<T>(ids: CaptureIds, run: () => Promise<T>, created?: (result: T) => CaptureIds, draft?: DraftChange): Promise<T>;
+  /** 草稿随打随改（不进撤销栈）；值真的变了才算用户动过 */
+  editDraft(key: string, patch: Partial<Draft>): void;
+  /** 放一份没动过的草稿（自动预填、保存后接着的新行）；不进撤销栈 */
+  placeDraft(key: string, draft: Draft): void;
+  /** 一格填完了：草稿和上次记的不一样就记一步撤销 */
+  recordDraft(key: string): void;
+  /** 清空草稿行（可撤销） */
+  clearDraft(key: string, blank: Draft): void;
+  /** 跳到某份草稿所在的流水页那一天 / 那一周 */
+  openDraft(key: string): Promise<void>;
   undo(): Promise<void>;
   redo(): Promise<void>;
   /** 导入/示例数据这种不可撤销的大改动之后调用：旧快照已经对不上了 */
@@ -163,6 +191,7 @@ export const useApp = create<AppState>((set, get) => ({
   scheduleView: "week",
   dayDate: todayStr(),
   entries: [],
+  drafts: {},
   toastMsg: "",
   toastSeq: 0,
 
@@ -171,13 +200,16 @@ export const useApp = create<AppState>((set, get) => ({
       const { db, mode } = await openDatabase();
       database = db;
       repos = createRepos(db);
-      const [dueSoonDays, copyFormat, copyHeader, autoCheckUpdates] = await Promise.all([
+      const [dueSoonDays, copyFormat, copyHeader, autoCheckUpdates, savedDrafts] = await Promise.all([
         repos.settings.get("dueSoonDays", 3),
         repos.settings.get<CopyFormat>("copyFormat", "excel"),
         repos.settings.get("copyHeader", true),
         repos.settings.get("autoCheckUpdates", true),
+        repos.settings.get<unknown>("logDrafts", {}),
       ]);
-      set({ mode, dueSoonDays, copyFormat, copyHeader, autoCheckUpdates });
+      const drafts = restoreDrafts(savedDrafts);
+      for (const [k, slot] of Object.entries(drafts)) draftMarks.set(k, slot);
+      set({ mode, dueSoonDays, copyFormat, copyHeader, autoCheckUpdates, drafts });
       await get().reloadAll();
       set({ ready: true });
       if (isTauri() && autoCheckUpdates) void get().checkUpdates(true);
@@ -327,8 +359,13 @@ export const useApp = create<AppState>((set, get) => ({
   async reloadAll() {
     await Promise.all([get().reloadTasks(), get().reloadWorkTypes(), get().reloadDicts(), get().reloadEntries()]);
   },
-  async createEntry(input) {
-    const id = await get().track({}, () => repos.entries.create(input), (made) => ({ entries: [made] }));
+  async createEntry(input, draft) {
+    const id = await get().track({}, () => repos.entries.create(input), (made) => ({ entries: [made] }), draft);
+    if (draft) {
+      draftMarks.set(draft.key, draft.after);
+      set((s) => ({ drafts: { ...s.drafts, [draft.key]: draft.after } }));
+      saveDraftsSoon();
+    }
     if (isNewWorkType(get().workTypes, input.workType)) await get().reloadWorkTypes();
     await Promise.all([get().reloadEntries(), get().upsertTasks([input.taskId])]);
     return id;
@@ -362,7 +399,38 @@ export const useApp = create<AppState>((set, get) => ({
     await get().reloadAll();
     return ids;
   },
-  track(ids, run, created) {
+  editDraft(key, patch) {
+    const cur = get().drafts[key];
+    if (!cur) return;
+    const draft = { ...cur.draft, ...patch };
+    if (sameDraft(draft, cur.draft)) return;
+    set((s) => ({ drafts: { ...s.drafts, [key]: { draft, touched: true } } }));
+    saveDraftsSoon();
+  },
+  placeDraft(key, draft) {
+    const slot = { draft, touched: false };
+    draftMarks.set(key, slot);
+    set((s) => ({ drafts: { ...s.drafts, [key]: slot } }));
+    saveDraftsSoon();
+  },
+  recordDraft(key) {
+    pushDraftStep(key);
+  },
+  clearDraft(key, blank) {
+    if (!get().drafts[key]) return;
+    set((s) => ({ drafts: { ...s.drafts, [key]: { draft: blank, touched: false } } }));
+    pushDraftStep(key, "清空草稿");
+    saveDraftsSoon();
+  },
+  async openDraft(key) {
+    const k = parseDraftKey(key);
+    if (!k) return;
+    set({ screen: "log" });
+    if (get().scheduleView !== k.view) get().setScheduleView(k.view);
+    if (k.view === "day") await get().setDay(k.date);
+    else if (get().weekStart !== k.date) await get().setWeek(k.date);
+  },
+  track(ids, run, created, draft) {
     return serial(async () => {
       const before = await repos.snapshots.capture(ids);
       const result = await run();
@@ -375,7 +443,7 @@ export const useApp = create<AppState>((set, get) => ({
       before.missingRequesters.push(...(made.requesters ?? []));
       const step = describeStep(before, after, { taskTitle: (id) => get().tasks.find((t) => t.id === id)?.title });
       if (step) {
-        history.push({ label: step.label, undoMessage: step.undoMessage, redoMessage: step.redoMessage, before, after });
+        history.push({ label: step.label, undoMessage: step.undoMessage, redoMessage: step.redoMessage, before, after, draft });
         set({ history: history.info() });
       }
       return result;
@@ -402,26 +470,54 @@ function runHistory(direction: "undo" | "redo"): Promise<void> {
       toast(direction === "undo" ? "没有可以撤销的操作" : "没有可以重做的操作");
       return;
     }
-    let conflicts: string[];
-    try {
-      conflicts = await repos.snapshots.apply(direction === "undo" ? item.before : item.after);
-    } catch (e) {
-      toast(`${direction === "undo" ? "撤销" : "重做"}失败：${e instanceof Error ? e.message : String(e)}`);
-      return;
+    const touchesDb = snapshotRows(item.before) + snapshotRows(item.after) > 0;
+    let conflicts: string[] = [];
+    if (touchesDb) {
+      try {
+        conflicts = await repos.snapshots.apply(direction === "undo" ? item.before : item.after);
+      } catch (e) {
+        toast(`${direction === "undo" ? "撤销" : "重做"}失败：${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
     }
     if (direction === "undo") history.commitUndo();
     else history.commitRedo();
     useApp.setState({ history: history.info() });
 
-    // 涉及的时间记录不在当前这一周的话，跳过去，让用户看得到变化
-    const { weekStart, scheduleView, dayDate, screen } = useApp.getState();
-    const dates = [...item.before.entries, ...item.after.entries].map((e) => e.entry_date);
-    const end = weekEndOf(weekStart);
-    const seeingOneDay = screen === "schedule" && scheduleView === "day";
-    if (dates.length && !dates.some((d) => (seeingOneDay ? d === dayDate : d >= weekStart && d <= end))) await useApp.getState().setDay(dates[0]);
-    await reloadAll();
+    if (item.draft) {
+      // 草稿放回这一步之前/之后的样子，并跳到那份草稿所在的那一天/那一周
+      const { key } = item.draft;
+      const slot = direction === "undo" ? item.draft.before : item.draft.after;
+      draftMarks.set(key, slot);
+      useApp.setState((s) => ({ drafts: { ...s.drafts, [key]: slot } }));
+      saveDraftsSoon();
+      await useApp.getState().openDraft(key);
+    } else {
+      // 涉及的时间记录不在当前这一周的话，跳过去，让用户看得到变化
+      const { weekStart, scheduleView, dayDate, screen } = useApp.getState();
+      const dates = [...item.before.entries, ...item.after.entries].map((e) => e.entry_date);
+      const end = weekEndOf(weekStart);
+      const seeingOneDay = screen === "schedule" && scheduleView === "day";
+      if (dates.length && !dates.some((d) => (seeingOneDay ? d === dayDate : d >= weekStart && d <= end))) await useApp.getState().setDay(dates[0]);
+    }
+    if (touchesDb) await reloadAll();
 
     const message = direction === "undo" ? item.undoMessage : item.redoMessage;
     toast(conflicts.length ? `${message}（有 ${conflicts.length} 处没法还原：${conflicts.join("；")}）` : message);
   });
+}
+
+/** 草稿和上次记进撤销栈时比，变了就记一步。草稿的步骤不碰库，前后快照都是空的。 */
+function pushDraftStep(key: string, label?: string) {
+  const cur = useApp.getState().drafts[key];
+  if (!cur) return;
+  const mark = draftMarks.get(key);
+  draftMarks.set(key, cur);
+  if (!mark) return;
+  const step = describeDraftStep(key, mark.draft, cur.draft, label);
+  if (!step) return;
+  // 撤回到的样子如果是空的，就当作没动过（不提醒、不存盘）
+  const before = { draft: mark.draft, touched: mark.touched && draftHasContent(mark.draft) };
+  history.push({ ...step, before: emptySnapshot(), after: emptySnapshot(), draft: { key, before, after: cur } });
+  useApp.setState({ history: history.info() });
 }

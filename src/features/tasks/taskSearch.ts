@@ -17,8 +17,4 @@ export function taskSearchText(t: Task): string {
   return text;
 }
 
-/** 空格分隔的多个词要同时命中，所以“订单 张三”能同时按标题和需求方收窄。 */
-export function matchesQuery(haystack: string, query: string): boolean {
-  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return tokens.every((tok) => haystack.includes(tok));
-}
+export { matchesQuery } from "../../lib/search";

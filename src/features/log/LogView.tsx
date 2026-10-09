@@ -11,6 +11,7 @@ import { clickSelect, EMPTY_SELECTION, extendSelection, marqueeSelect, rangeIds,
 import { SelectionBar } from "../selection/SelectionBar";
 import { KindBadge } from "../tasks/TaskPanel";
 import { matchesQuery, sortTasksForPicker, taskSearchText } from "../tasks/taskSearch";
+import { draftHasContent, draftKey, draftKeyLabel } from "./drafts";
 import { CROSS_DAY_MSG, LOG_FIELDS, nextDraft, parsePastedText, resolveTask, type Draft, type LogField } from "./logModel";
 
 const DRAFT = "draft";
@@ -55,10 +56,13 @@ function TextCell(props: { value: string; placeholder?: string; alwaysCommit?: b
         if (e.key === "Escape") setText(value);
         else if (e.key === "Enter" && e.altKey && !e.ctrlKey && !e.metaKey) {
           // Alt+Enter 是 Excel 里单元格内换行的习惯，textarea 默认不认，手动插一个
+          // 用 insertText 插，文本框自己的 Ctrl+Z 才撤得掉这个换行
           e.preventDefault();
           const el = e.currentTarget;
-          el.setRangeText("\n", el.selectionStart, el.selectionEnd, "end");
-          change(el.value);
+          if (!document.execCommand("insertText", false, "\n")) {
+            el.setRangeText("\n", el.selectionStart, el.selectionEnd, "end");
+            change(el.value);
+          }
         }
       }}
     />
@@ -73,8 +77,8 @@ function caretMovesWithinText(target: HTMLElement, key: string): boolean {
 }
 
 export function LogView() {
-  const { tasks, workTypes, entries, weekStart, scheduleView, dayDate, mode, selection } = useApp(
-    useShallow((s) => ({ tasks: s.tasks, workTypes: s.workTypes, entries: s.entries, weekStart: s.weekStart, scheduleView: s.scheduleView, dayDate: s.dayDate, mode: s.mode, selection: s.selection })),
+  const { tasks, workTypes, entries, weekStart, scheduleView, dayDate, mode, selection, drafts } = useApp(
+    useShallow((s) => ({ tasks: s.tasks, workTypes: s.workTypes, entries: s.entries, weekStart: s.weekStart, scheduleView: s.scheduleView, dayDate: s.dayDate, mode: s.mode, selection: s.selection, drafts: s.drafts })),
   );
   const toast = useApp((s) => s.toast);
   const setSelection = useApp((s) => s.setSelection);
@@ -91,28 +95,32 @@ export function LogView() {
   const dateOutOfView = (date: string) => (dayMode ? date !== dayDate : date < weekStart || date > weekEnd);
   const jumpToDate = (date: string) => (dayMode ? useApp.getState().setDay(date) : useApp.getState().setWeek(weekStartFor(date)));
 
-  const [draft, setDraftState] = useState<Draft>(() => nextDraft(visible.at(-1), todayStr(), dayMode ? dayDate : weekStart, dayMode ? dayDate : weekEnd));
-  const draftRef = useRef(draft);
+  /**
+   * 草稿行每一天 / 每一周各有一份，放在全局 store 里（还会存盘），切走再回来、关掉重开都还在。
+   * 用户动过的草稿原样保留；没动过的（自动预填的）每次回到这一天/这一周按最新的记录重新预填。
+   */
+  const key = draftKey(dayMode ? "day" : "week", dayMode ? dayDate : weekStart);
+  const autoDraft = () => nextDraft(visible.at(-1), todayStr(), dayMode ? dayDate : weekStart, dayMode ? dayDate : weekEnd);
+  const slot = drafts[key];
+  const draft = slot?.draft ?? autoDraft();
+  /** 刚改完草稿（store 已经同步更新）马上就要读，比如粘贴后立刻保存：直接问 store，不等重新渲染 */
+  const currentDraft = (): Draft => useApp.getState().drafts[key]?.draft ?? draft;
   const patchDraft = (p: Partial<Draft>) => {
-    draftRef.current = { ...draftRef.current, ...p };
-    setDraftState(draftRef.current);
+    if (!useApp.getState().drafts[key]) useApp.getState().placeDraft(key, draft);
+    useApp.getState().editDraft(key, p);
   };
-  const resetDraft = (d: Draft) => {
-    draftRef.current = d;
-    setDraftState(d);
-  };
-  const period = dayMode ? dayDate : weekStart;
-  const draftPeriod = useRef(period);
   useEffect(() => {
-    // 只在真的换了周/天时重置草稿；同一周/天内录入产生的 entries 变化由 commitDraft 自己接续草稿。
-    // （板块被隐藏再显示时这个副作用会重新跑一遍，所以要比较，不能无条件重置，否则写到一半的草稿会丢）
-    if (draftPeriod.current === period) return;
-    draftPeriod.current = period;
-    resetDraft(nextDraft(visible.at(-1), todayStr(), dayMode ? dayDate : weekStart, dayMode ? dayDate : weekEnd));
+    const cur = useApp.getState().drafts[key];
+    if (!cur?.touched) useApp.getState().placeDraft(key, autoDraft());
     setProblem(null);
     setNotice("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period]);
+  }, [key]);
+  /** 别的日期还有写了一半没保存的草稿：在页面顶上提醒，点一下跳过去 */
+  const otherDrafts = Object.entries(drafts)
+    .filter(([k, s]) => k !== key && s.touched && draftHasContent(s.draft))
+    .map(([k]) => k)
+    .sort();
 
   const pickerTasks = useMemo(() => sortTasksForPicker(tasks), [tasks]);
   const taskItems: ComboItem[] = useMemo(() => pickerTasks.map((t) => ({ id: t.id, label: t.title, sub: `${t.code ? t.code + " · " : ""}${t.system ?? ""}`, search: taskSearchText(t) })), [pickerTasks]);
@@ -145,7 +153,7 @@ export function LogView() {
 
   /* ---------- 读取/写入某一格 ---------- */
   const fieldValue = (row: string, field: LogField): string => {
-    if (row === DRAFT) return draftRef.current[FIELD_TO_DRAFT_KEY[field]];
+    if (row === DRAFT) return currentDraft()[FIELD_TO_DRAFT_KEY[field]];
     const e = visible.find((x) => x.id === row);
     if (!e) return "";
     return { task: e.taskId, type: e.workType ?? "", content: e.content, date: e.date, start: e.start ?? "", end: e.end ?? "" }[field];
@@ -155,6 +163,7 @@ export function LogView() {
   const setField = async (row: string, field: LogField, value: string): Promise<boolean> => {
     if (row === DRAFT) {
       patchDraft({ [FIELD_TO_DRAFT_KEY[field]]: value });
+      useApp.getState().recordDraft(key); // 填完一格算一步，Ctrl+Z 能撤回
       return true;
     }
     const patch: Record<string, string | null> = { task: { taskId: value }, type: { workType: value }, content: { content: value }, date: { date: value }, start: { start: value }, end: { end: value } }[field] as never;
@@ -199,7 +208,7 @@ export function LogView() {
 
   /* ---------- 保存草稿 ---------- */
   const commitDraft = async () => {
-    const d = { ...draftRef.current };
+    const d = { ...currentDraft() };
     setProblem(null);
     setNotice("");
     const failDraft = (field: LogField, msg: string) => {
@@ -219,13 +228,17 @@ export function LogView() {
     const ns = normTime(d.start);
     const ne = normTime(d.end);
     if (!ns) return failDraft("start", "开始时间没填完整；Ctrl+; 填现在。");
+    // 保存以后草稿行接着下一条：沿用日期和划分，开始时间接这一条的结束。撤销这次保存会把内容放回草稿行
+    const next: Draft = { taskId: "", type: d.type, content: "", date: nd, start: !ne || ne === "24:00" ? "" : ne, end: "" };
     try {
-      await useApp.getState().createEntry({ taskId: d.taskId, date: nd, start: ns, end: ne ?? null, workType: d.type || null, content: d.content });
+      await useApp.getState().createEntry(
+        { taskId: d.taskId, date: nd, start: ns, end: ne ?? null, workType: d.type || null, content: d.content },
+        { key, before: { draft: d, touched: true }, after: { draft: next, touched: false } },
+      );
     } catch (e) {
       return failDraft("end", errText(e));
     }
     if (dateOutOfView(nd)) await jumpToDate(nd);
-    resetDraft({ taskId: "", type: d.type, content: "", date: nd, start: !ne || ne === "24:00" ? "" : ne, end: "" });
     toast(ne ? `已记录 ${ns}–${ne}` : `已记录 ${ns} 起，结束时间留空，记为进行中（之后在结束格补上）`);
     requestAnimationFrame(() => focusCell(DRAFT, "task"));
   };
@@ -352,6 +365,7 @@ export function LogView() {
       if (p.type) patch.type = p.type;
       if (p.content) patch.content = p.content;
       patchDraft(patch);
+      useApp.getState().recordDraft(key);
       toast(t ? "已带入任务、划分和内容，时间接着上一条，补个结束时间就行" : "没匹配到任务，请在任务格里搜索选择");
       requestAnimationFrame(() => focusCell(DRAFT, t ? "end" : "task"));
       return;
@@ -448,7 +462,7 @@ export function LogView() {
       />
     );
     return (
-      <tr key={row} data-row={row} className={`log-row${isDraft ? " log-draft" : ""}${e && !e.end ? " log-open" : ""}${e && chosen.has(e.id) ? " selected" : ""}`}>
+      <tr key={isDraft ? `${DRAFT}:${key}` : row} data-row={row} className={`log-row${isDraft ? " log-draft" : ""}${e && !e.end ? " log-open" : ""}${e && chosen.has(e.id) ? " selected" : ""}`}>
         <td className="c-num" tabIndex={0} title={isDraft ? undefined : "点击选中；Ctrl / Shift 叠加，上下拖动选多行，Ctrl+C 复制"} onMouseDown={e ? (ev) => onNumMouseDown(ev, e.id) : undefined}>
           {label}
         </td>
@@ -462,7 +476,7 @@ export function LogView() {
             key={comboTick}
             items={taskItems}
             value={task?.title ?? ""}
-            placeholder={isDraft ? "搜索任务：标题 / 编号 / 系统 / 需求方" : ""}
+            placeholder={isDraft ? "搜索任务：标题 / 编号 / 系统 / 需求方，可打拼音或首字母" : ""}
             className="log-in"
             matcher={taskMatcher}
             allowCreate
@@ -517,6 +531,21 @@ export function LogView() {
               ×
             </button>
           )}
+          {isDraft && slot?.touched && draftHasContent(draft) && (
+            <button
+              type="button"
+              className="log-del"
+              tabIndex={-1}
+              title="清空这行草稿（Ctrl+Z 可以撤回）"
+              onClick={() => {
+                useApp.getState().clearDraft(key, autoDraft());
+                setComboTick((n) => n + 1);
+                setProblem(null);
+              }}
+            >
+              ×
+            </button>
+          )}
         </td>
       </tr>
     );
@@ -530,6 +559,16 @@ export function LogView() {
         <kbd>Tab</kbd> 换格 · 日期/时间直接敲数字，敲满自动跳下一段/下一格 · <kbd>Ctrl</kbd>+<kbd>;</kbd> 填今天/现在（按当前格的类型） · <kbd>Ctrl</kbd>+<kbd>D</kbd> 复制上一行同一格 · <kbd>Ctrl</kbd>+<kbd>Enter</kbd>{" "}
         保存并新开一行 · 点行号选中（<kbd>Ctrl</kbd> 加选、<kbd>Shift</kbd> 选区间、上下拖动框选、<kbd>Shift</kbd>+<kbd>↑↓</kbd> 扩选），<kbd>Ctrl</kbd>+<kbd>C</kbd> 复制，Excel 明细行也能直接粘进来 · 具体内容里 <kbd>Shift</kbd>/<kbd>Alt</kbd>+<kbd>Enter</kbd> 换行 · 结束时间可以先空着，记为“进行中”，之后补上
       </div>
+      {otherDrafts.length > 0 && (
+        <div className="log-other-drafts">
+          还有没保存的草稿：
+          {otherDrafts.map((k) => (
+            <button key={k} type="button" className="btn-ghost" title="跳过去接着写" onClick={() => void useApp.getState().openDraft(k)}>
+              {draftKeyLabel(k)}
+            </button>
+          ))}
+        </div>
+      )}
       {tasks.length === 0 && (
         <div className="empty-note">
           还没有任务，流水没法关联。

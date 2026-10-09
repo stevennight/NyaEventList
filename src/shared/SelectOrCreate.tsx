@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { matchesQuery } from "../lib/search";
 
 export interface ComboItem {
   id: string;
@@ -46,7 +47,7 @@ export function SelectOrCreate({ items, value, placeholder, className, allowCrea
   const rows = useMemo(() => {
     if (!open) return []; // 表格里有几十个下拉框，收起时别去过滤上千个选项
     const q = text.trim();
-    const match = matcher ?? ((it: ComboItem, query: string) => `${it.label} ${it.search ?? ""}`.toLowerCase().includes(query.toLowerCase()));
+    const match = matcher ?? ((it: ComboItem, query: string) => matchesQuery(`${it.label} ${it.search ?? ""}`, query));
     const list = typing ? items.filter((it) => match(it, q)) : items;
     const out: { item?: ComboItem; create?: string }[] = list.slice(0, MAX_ROWS).map((item) => ({ item }));
     const exact = items.some((it) => it.label.toLowerCase() === q.toLowerCase());

@@ -12,9 +12,11 @@ const isTextField = (t: EventTarget | null): t is HTMLInputElement | HTMLTextAre
 };
 
 /**
- * Ctrl+Z 撤销 / Ctrl+Shift+Z 或 Ctrl+Y 重做（Mac 用 ⌘）。
- * 正在输入框里打字（内容和刚进入时不一样）时不抢：文本框自己的撤销、或者什么都不做；
- * 没在打字（光标只是停在某个格子里、点在日程/看板上）时，撤销上一步对数据的修改。
+ * Ctrl+Z 撤销 / Ctrl+Shift+Z 或 Ctrl+Y 重做（Mac 用 ⌘）。跟 Excel 一样分两种状态：
+ * - 正在一个格子里打字（内容和刚进入时不一样）：不抢，只撤这个格子里敲的字（文本框自己的撤销；
+ *   日期/时间格自己处理，见 SegmentedField），碰不到别的东西；
+ * - 没在打字（光标只是停在某个格子里、点在日程/看板上）：撤销最近一步，不管是保存的记录还是草稿行里填的一格，
+ *   都在同一条时间线上按先后撤。
  * 任务/时间记录的表单开着时也不抢。
  */
 export function useUndoShortcut() {
@@ -23,7 +25,7 @@ export function useUndoShortcut() {
       if (isTextField(e.target)) focusValue.set(e.target, e.target.value);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.isComposing || e.altKey || !(e.ctrlKey || e.metaKey)) return;
+      if (e.defaultPrevented || e.isComposing || e.altKey || !(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
       const redo = (key === "z" && e.shiftKey) || (key === "y" && !e.shiftKey);
       const undo = key === "z" && !e.shiftKey;
@@ -34,7 +36,13 @@ export function useUndoShortcut() {
       if (isTextField(t) && t.value !== (focusValue.get(t) ?? t.value)) return; // 正在打字
       e.preventDefault();
       if (e.repeat) return; // 按住不放不要一路撤销下去
-      void (redo ? st.redo() : st.undo());
+      void (redo ? st.redo() : st.undo()).then(() =>
+        // 撤销可能把光标所在格子的内容换掉了（草稿行）：以换完的内容作为“没在打字”的基准，不然下一次 Ctrl+Z 会被当成在打字
+        requestAnimationFrame(() => {
+          const a = document.activeElement;
+          if (isTextField(a)) focusValue.set(a, a.value);
+        }),
+      );
     };
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("keydown", onKeyDown);

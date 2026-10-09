@@ -52,7 +52,7 @@ export function SearchBar({ className }: { className?: string }) {
   return (
     <div className={className} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div className="search-box">
-        <input value={panel.query} onChange={(e) => setPanel({ query: e.target.value })} placeholder="搜索标题 / 编号 / 系统 / 需求方（空格分隔多个词）" />
+        <input value={panel.query} onChange={(e) => setPanel({ query: e.target.value })} placeholder="搜索标题 / 编号 / 系统 / 需求方（空格分隔多个词，可打拼音或首字母）" />
         {panel.query && (
           <button type="button" className="link-btn" onClick={() => setPanel({ query: "" })} aria-label="清空搜索">
             ×
