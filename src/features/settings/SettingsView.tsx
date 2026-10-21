@@ -155,7 +155,7 @@ export function SettingsView() {
           <input type="checkbox" checked={copyHeader} onChange={(e) => app.setCopyHeader(e.target.checked)} />
           Excel 格式带表头行（粘回本应用时会自动跳过表头）
         </label>
-        <p className="set-hint">Excel 格式的前 9 列和旧「明细」表一致（编号、标题、划分、工作内容类型、内容、日期、开始、结束、用时），后面附系统和需求方；粘贴时会按“第 6 列是日期”自动认出来。</p>
+        <p className="set-hint">Excel 格式的前 9 列和旧「明细」表一致（编号、标题、划分、工作内容类型、内容、日期、开始、结束、用时），后面附系统、需求方和任务类型（需求/非需求）；粘贴时会按“第 6 列是日期”自动认出来。</p>
       </section>
 
       <section className="set-block">

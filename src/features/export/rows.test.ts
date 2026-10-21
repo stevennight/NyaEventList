@@ -12,6 +12,7 @@ const tasks = [
     system: "订单系统",
     category: "执行类",
     requesters: ["张三", "李四"],
+    kind: "requirement",
   } as Task,
 ];
 const entry = (over: Partial<TimeEntry>): TimeEntry => ({
@@ -34,7 +35,7 @@ describe("export rows", () => {
 
   it("sorts by date and start, and flattens task fields", () => {
     expect(rows.map((r) => r.日期)).toEqual(["2026-09-16", "2026-09-17"]);
-    expect(rows[0]).toMatchObject({ 编号: "A12", 系统: "订单系统", 需求方: "张三、李四", 例行工作内容划分: "执行类", 例行工作工作内容: "功能开发", 用时: 1.5 });
+    expect(rows[0]).toMatchObject({ 编号: "A12", 系统: "订单系统", 需求方: "张三、李四", 任务类型: "需求", 例行工作内容划分: "执行类", 例行工作工作内容: "功能开发", 用时: 1.5 });
     expect(Object.keys(rows[0]).slice(0, 9)).toEqual(["编号", "标题", "例行工作内容划分", "例行工作工作内容", "工作内容", "日期", "开始时间", "结束时间", "用时"]); // 前 9 列跟旧「明细」一致
   });
   it("makes TSV that pastes cleanly into Excel", () => {

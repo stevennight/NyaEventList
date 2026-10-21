@@ -3,9 +3,9 @@ import type { Task, TimeEntry } from "../../db/models";
 /**
  * 复制/导出的列。前 9 列的顺序和名称跟旧「明细」表一致（编号、标题、划分、工作内容类型、内容、日期、开始、结束、用时），
  * 所以复制出去的行能直接贴回旧表，也能原样粘回本应用（粘贴时按第 6 列是日期来认出这种布局）；
- * 系统、需求方是额外附上的两列。
+ * 系统、需求方、任务类型（需求/非需求）是额外附上的列。
  */
-export const EXPORT_COLUMNS = ["编号", "标题", "例行工作内容划分", "例行工作工作内容", "工作内容", "日期", "开始时间", "结束时间", "用时", "系统", "需求方"] as const;
+export const EXPORT_COLUMNS = ["编号", "标题", "例行工作内容划分", "例行工作工作内容", "工作内容", "日期", "开始时间", "结束时间", "用时", "系统", "需求方", "任务类型"] as const;
 export type ExportRow = Record<(typeof EXPORT_COLUMNS)[number], string | number>;
 
 /** 单条记录变成一行导出数据；`byId` 是任务表按 id 建的索引，调用方按需自己建（重复调用别每次都重建） */
@@ -23,6 +23,7 @@ export function toExportRow(e: TimeEntry, byId: Map<string, Task>): ExportRow {
     用时: e.end ? e.durationHours : "", // 进行中的记录还没有用时
     系统: t?.system ?? "",
     需求方: t?.requesters.join("、") ?? "",
+    任务类型: t ? (t.kind === "requirement" ? "需求" : "非需求") : "",
   };
 }
 
